@@ -241,6 +241,9 @@ fun PlayerScreen(
         readySinceOpen = false
         openingSeconds = 0
         bufferingStartedAt = 0L
+        // 重试时也按新的起始位置重新判断「是否已经出画面」。
+        resumeProgressed = pendingStart <= 0L
+        resumeBaselineMs = pendingStart
         runCatching {
             player.setMediaData(
                 data = UriMediaData(

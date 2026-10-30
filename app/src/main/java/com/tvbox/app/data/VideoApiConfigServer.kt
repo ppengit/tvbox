@@ -151,7 +151,7 @@ class VideoApiConfigServer(
             <head>
               <meta charset="utf-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>TVBox 视频接口配置</title>
+              <title>小鸡影视视频接口配置</title>
               <style>
                 body { margin: 0; font-family: sans-serif; background: #10141f; color: #f5f7fb; }
                 main { max-width: 540px; margin: 0 auto; padding: 28px 18px; }
@@ -167,7 +167,7 @@ class VideoApiConfigServer(
             </head>
             <body>
               <main>
-                <h1>TVBox 视频接口配置</h1>
+                <h1>小鸡影视视频接口配置</h1>
                 <div class="panel">
                   <p>添加 MacCms 视频接口后，会同步到电视设置页的视频接口列表。</p>
                   <p class="hint">示例：https://example.com/api.php/provide/vod</p>

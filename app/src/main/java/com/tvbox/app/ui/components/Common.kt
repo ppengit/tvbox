@@ -1,9 +1,13 @@
 ﻿package com.tvbox.app.ui.components
 
 import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,7 +42,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.Font
@@ -70,8 +77,10 @@ fun AppHeader(
     onSettings: () -> Unit = {},
     showShortcutActions: Boolean = false,
     firstActionModifier: Modifier = Modifier,
+    actionScrollState: androidx.compose.foundation.ScrollState? = null,
     modifier: Modifier = Modifier,
 ) {
+    val compact = LocalConfiguration.current.screenWidthDp < 760
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -80,7 +89,11 @@ fun AppHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(
-            modifier = Modifier.weight(1f),
+            modifier = if (compact) {
+                Modifier.width(160.dp)
+            } else {
+                Modifier.weight(1f)
+            },
         ) {
             Text(
                 text = title,
@@ -105,7 +118,17 @@ fun AppHeader(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = if (compact) {
+                Modifier.weight(1f).horizontalScroll(
+                    actionScrollState ?: rememberScrollState(),
+                ).focusGroup()
+            } else {
+                Modifier
+            },
+        ) {
             if (showShortcutActions) {
                 HeaderActionButton(text = "历史(1)", onClick = onHistory, legacyStyle = true, modifier = firstActionModifier)
                 HeaderActionButton(text = "搜索(2)", onClick = onSearch, legacyStyle = true)
@@ -151,9 +174,12 @@ fun AppNavigationRail(
                 color = TvColors.Accent,
                 contentColor = TvColors.Background,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("TV", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                }
+                Image(
+                    painter = painterResource(R.drawable.ic_brand_mark),
+                    contentDescription = "小鸡影视",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
             }
             Spacer(modifier = Modifier.height(8.dp))
             TvNavigationItem("首页", NavigationIcon.Home, screen.isHomeDestination(), onHome)
@@ -185,8 +211,7 @@ private fun TvNavigationItem(
             )
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
         shape = shape,
         color = when {
             focused -> TvColors.SurfaceRaised
@@ -269,8 +294,7 @@ private fun HeaderActionButton(
             )
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
         shape = shape,
         color = when {
             focused && legacyStyle -> TvColors.Accent
@@ -301,9 +325,25 @@ fun LoadingState(text: String, modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        CircularProgressIndicator()
-        Spacer(modifier = Modifier.height(14.dp))
-        Text(text = text, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(TvColors.AccentSoft),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(36.dp),
+                strokeWidth = 3.dp,
+                color = TvColors.AccentStrong,
+            )
+        }
+        Spacer(modifier = Modifier.height(18.dp))
+        Text(
+            text = text,
+            color = TvColors.TextSecondary,
+            style = MaterialTheme.typography.bodyLarge,
+        )
     }
 }
 
@@ -318,10 +358,78 @@ fun ErrorState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(text = message, style = MaterialTheme.typography.titleMedium)
-        Spacer(modifier = Modifier.height(16.dp))
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(TvColors.Danger.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "!",
+                color = TvColors.Danger,
+                style = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(modifier = Modifier.height(18.dp))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.titleMedium,
+            color = TvColors.TextPrimary,
+        )
+        Spacer(modifier = Modifier.height(20.dp))
         Button(onClick = onRetry) {
             Text("重试")
+        }
+    }
+}
+
+@Composable
+fun EmptyState(
+    title: String,
+    subtitle: String? = null,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(TvColors.SurfaceRaised),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "· · ·",
+                color = TvColors.TextTertiary,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        Spacer(modifier = Modifier.height(18.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = TvColors.TextPrimary,
+        )
+        if (!subtitle.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = TvColors.TextSecondary,
+            )
+        }
+        if (actionLabel != null && onAction != null) {
+            Spacer(modifier = Modifier.height(20.dp))
+            Button(onClick = onAction) {
+                Text(actionLabel)
+            }
         }
     }
 }
@@ -344,8 +452,7 @@ fun CategoryPill(
             )
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
         shape = shape,
         color = when {
             focused -> TvColors.SurfaceRaised
@@ -375,7 +482,7 @@ fun MoviePosterCard(
     modifier: Modifier = Modifier,
     posterAspectRatio: Float = 2f / 3f,
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(TvDimens.CardRadius)
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
@@ -387,13 +494,13 @@ fun MoviePosterCard(
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(if (focused) TvColors.SurfaceRaised else TvColors.Surface)
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(posterAspectRatio)
+                .heightIn(max = (posterAspectRatio * 170f).dp)
                 .background(TvColors.SurfaceRaised),
         ) {
             if (movie.posterUrl.isNotBlank()) {
@@ -457,7 +564,7 @@ fun DoubanHotPosterCard(
     modifier: Modifier = Modifier,
     posterAspectRatio: Float = 0.78f,
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(TvDimens.CardRadius)
     val context = LocalContext.current
     var focused by remember { mutableStateOf(false) }
     var posterFailed by remember(item.doubanId, item.posterUrl) { mutableStateOf(item.posterUrl.isBlank()) }
@@ -484,13 +591,13 @@ fun DoubanHotPosterCard(
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(if (focused) TvColors.SurfaceRaised else TvColors.Surface)
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(posterAspectRatio)
+                .heightIn(max = (posterAspectRatio * 170f).dp)
                 .background(TvColors.SurfaceRaised),
         ) {
             if (!posterFailed) {
@@ -569,7 +676,7 @@ fun HistoryItemCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(TvDimens.CardRadius)
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
@@ -577,8 +684,7 @@ fun HistoryItemCard(
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
@@ -642,7 +748,7 @@ fun HistoryItemCard(
 
 @Composable
 fun PosterImage(movie: Movie, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(TvDimens.CardRadius)
     Box(
         modifier = modifier
             .clip(shape)

@@ -327,8 +327,7 @@ private fun EpisodeButton(
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(containerColor)
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
         shape = shape,
         color = containerColor,
         contentColor = contentColor,

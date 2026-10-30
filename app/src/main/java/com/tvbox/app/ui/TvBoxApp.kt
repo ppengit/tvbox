@@ -9,6 +9,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -72,6 +74,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,6 +98,8 @@ import com.tvbox.app.ui.components.MoviePosterCard
 import com.tvbox.app.ui.components.PageSurface
 import com.tvbox.app.ui.components.PosterImage
 import com.tvbox.app.ui.components.tvFocusScale
+import com.tvbox.app.ui.components.RestoreFocusOnClose
+import com.tvbox.app.ui.components.requestFocusWhenReady
 import com.tvbox.app.ui.theme.TvColors
 import com.tvbox.app.ui.theme.TvDimens
 import com.tvbox.app.ui.theme.TvLayout
@@ -115,7 +120,8 @@ fun TvBoxApp(
     Box(modifier = Modifier.fillMaxSize()) {
         val showNavigationRail = state.appSettings.theme == TvTheme.Cinema &&
             state.screen != TvScreen.Player &&
-            state.screen != TvScreen.Live
+            state.screen != TvScreen.Live &&
+            !(state.screen == TvScreen.PlatformLive && state.platformLiveDestination == PlatformLiveDestination.Player)
         if (showNavigationRail) {
             Row(modifier = Modifier.fillMaxSize()) {
                 AppNavigationRail(
@@ -366,9 +372,9 @@ private fun HomeScreen(
         val allCategoryFocusRequester = remember { FocusRequester() }
         val navigationFocusRequester = remember { FocusRequester() }
         val navigationScope = rememberCoroutineScope()
+        val navigationScrollState = rememberScrollState()
         var forceNavigationVisible by remember { mutableStateOf(false) }
         var movingToNavigation by remember { mutableStateOf(false) }
-        var navigationUpHeld by remember { mutableStateOf(false) }
         val movieGridState = rememberLazyGridState()
         val homeFocus = rememberReturnFocus()
         val homeTopContentVisible by remember {
@@ -385,10 +391,6 @@ private fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .onPreviewKeyEvent { event ->
-                    if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP && navigationUpHeld) {
-                        if (event.type == KeyEventType.KeyUp) navigationUpHeld = false
-                        return@onPreviewKeyEvent true
-                    }
                     if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
                     when (event.nativeKeyEvent.keyCode) {
                         AndroidKeyEvent.KEYCODE_1,
@@ -435,7 +437,7 @@ private fun HomeScreen(
             AnimatedVisibility(visible = showHomeTopContent) {
                 Column {
                     AppHeader(
-                        title = if (cinemaTheme) "首页" else "TVBox",
+                        title = if (cinemaTheme) "首页" else "小鸡影视",
                         subtitle = homeSubtitle,
                         onHistory = actions::openHistory,
                         onSearch = actions::openSearch,
@@ -443,9 +445,10 @@ private fun HomeScreen(
                         onLive = actions::openLive,
                         onPlatformLive = actions::openPlatformLive,
                         onSettings = actions::openSettings,
-                        showShortcutActions = !cinemaTheme,
-                        firstActionModifier = Modifier.focusRequester(navigationFocusRequester),
-                    )
+                            showShortcutActions = !cinemaTheme,
+                            firstActionModifier = Modifier.focusRequester(navigationFocusRequester),
+                            actionScrollState = navigationScrollState,
+                        )
                     if (cinemaTheme && !state.isShowingDoubanHot) {
                         state.movies.firstOrNull()?.let { featuredMovie ->
                             FeaturedMovieHero(
@@ -484,13 +487,13 @@ private fun HomeScreen(
                     focus = homeFocus,
                     onContinue = { actions.resumeHistory(it, TvScreen.Home) },
                     onMoveToNavigation = {
-                        navigationUpHeld = true
                         forceNavigationVisible = true
                         if (!movingToNavigation) {
                             movingToNavigation = true
                             navigationScope.launch {
                                 try {
                                     movieGridState.scrollToItem(0, 0)
+                                    navigationScrollState.scrollTo(0)
                                     // The navigation can be outside composition until AnimatedVisibility expands it.
                                     for (attempt in 0..20) {
                                         withFrameNanos { }
@@ -596,112 +599,18 @@ private fun FeaturedMovieHero(
 }
 
 @Composable
-private fun HistoryScreen(
-    state: TvBoxUiState,
-    actions: TvBoxViewModel,
-) {
-    PageSurface { padding ->
-        var confirmClearHistory by remember { mutableStateOf(false) }
-        val historyGrid = rememberLazyGridState()
-        val historyFocus = rememberReturnFocus()
-        RestoreGridFocus(historyFocus, historyGrid, state.historyItems.mapIndexed { index, item -> "${item.apiLineId}:${item.movieId}" to index })
-        if (confirmClearHistory) {
-            AlertDialog(
-                onDismissRequest = { confirmClearHistory = false },
-                title = { Text("清空历史") },
-                text = { Text("确定要清空全部观看历史吗？清空后无法从历史页继续播放。") },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            confirmClearHistory = false
-                            actions.clearHistory()
-                        },
-                    ) {
-                        Text("清空")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { confirmClearHistory = false }) {
-                        Text("取消")
-                    }
-                },
-            )
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "历史",
-                        style = MaterialTheme.typography.headlineLarge,
-                    )
-                    Text(
-                        text = "观看记录：继续上次的线路、集数和播放进度",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        enabled = state.historyItems.isNotEmpty(),
-                        onClick = { confirmClearHistory = true },
-                    ) {
-                        Text("清空历史")
-                    }
-                    Button(onClick = actions::goBack) {
-                        Text("返回")
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(22.dp))
-            if (state.historyItems.isEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Text("暂无观看历史", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Button(onClick = actions::goBack) {
-                        Text("去看影片")
-                    }
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = TvLayout.HistoryGridMinWidth),
-                    state = historyGrid,
-                    contentPadding = PaddingValues(bottom = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(22.dp),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    items(state.historyItems, key = { "${it.apiLineId}:${it.movieId}" }) { item ->
-                        HistoryItemCard(item = item, onClick = {
-                            historyFocus.mark("${item.apiLineId}:${item.movieId}", state.historyItems.indexOf(item))
-                            actions.resumeHistory(item, TvScreen.History)
-                        },
-                            modifier = historyFocus.modifier("${item.apiLineId}:${item.movieId}", state.historyItems.indexOf(item)))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun SettingsScreen(
     state: TvBoxUiState,
     actions: TvBoxViewModel,
 ) {
     PageSurface { padding ->
         var confirmClearPlaybackStats by remember { mutableStateOf(false) }
+        val clearStatsFocus = remember { FocusRequester() }
+        val settingsBackFocus = remember { FocusRequester() }
+        RestoreFocusOnClose(confirmClearPlaybackStats, clearStatsFocus)
+        LaunchedEffect(Unit) { settingsBackFocus.requestFocusWhenReady() }
         if (confirmClearPlaybackStats) {
+            val cancelFocus = remember { FocusRequester() }
             AlertDialog(
                 onDismissRequest = { confirmClearPlaybackStats = false },
                 title = { Text("清空线路统计") },
@@ -717,11 +626,18 @@ private fun SettingsScreen(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { confirmClearPlaybackStats = false }) {
+                    TextButton(
+                        onClick = { confirmClearPlaybackStats = false },
+                        modifier = Modifier.focusRequester(cancelFocus),
+                    ) {
                         Text("取消")
                     }
                 },
             )
+            LaunchedEffect(Unit) {
+                kotlinx.coroutines.delay(80)
+                runCatching { cancelFocus.requestFocus() }
+            }
         }
         if (state.aiConfigDialogVisible) {
             AiConfigDialog(state = state, actions = actions)
@@ -749,7 +665,8 @@ private fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                SettingsActionButton(text = "返回", onClick = actions::goBack)
+                SettingsActionButton(text = "返回", onClick = actions::goBack,
+                    modifier = Modifier.focusRequester(settingsBackFocus))
             }
             Spacer(modifier = Modifier.height(22.dp))
             LazyVerticalGrid(
@@ -869,6 +786,7 @@ private fun SettingsScreen(
                         }
                         SettingsActionButton(
                             text = "清空统计",
+                            modifier = Modifier.focusRequester(clearStatsFocus),
                             enabled = state.playbackHealth.entryCount > 0,
                             onClick = { confirmClearPlaybackStats = true },
                         )
@@ -1093,6 +1011,20 @@ private fun AiProviderSetting(
     onOpenConfig: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val providerFocus = remember { FocusRequester() }
+    RestoreFocusOnClose(expanded, providerFocus)
+    if (expanded) {
+        com.tvbox.app.ui.components.OptionPickerDialog(
+            title = "选择观影助手",
+            labels = AiProviders.all.map { it.name },
+            selectedIndex = AiProviders.all.indexOf(selectedProvider).coerceAtLeast(0),
+            onSelect = { index ->
+                expanded = false
+                onProviderSelect(AiProviders.all[index].id)
+            },
+            onDismiss = { expanded = false },
+        )
+    }
     val displayModelName = modelName.ifBlank { selectedProvider.defaultModel }
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1105,27 +1037,11 @@ private fun AiProviderSetting(
                 style = MaterialTheme.typography.titleMedium,
             )
             Spacer(modifier = Modifier.height(8.dp))
-            Box {
-                SettingsActionButton(
-                    text = "${selectedProvider.name} ▾",
-                    onClick = { expanded = true },
-                )
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                ) {
-                    AiProviders.all.forEach { provider ->
-                        val selected = provider.id == selectedProvider.id
-                        DropdownMenuItem(
-                            text = { Text(if (selected) "已选 · ${provider.name}" else provider.name) },
-                            onClick = {
-                                expanded = false
-                                onProviderSelect(provider.id)
-                            },
-                        )
-                    }
-                }
-            }
+            SettingsActionButton(
+                text = "${selectedProvider.name} ▾",
+                onClick = { expanded = true },
+                modifier = Modifier.focusRequester(providerFocus),
+            )
         }
         SettingsActionButton(
             text = "模型：$displayModelName",
@@ -1164,8 +1080,7 @@ private fun SettingsActionButton(
             )
             .clip(shape)
             .onFocusChanged { focused = enabled && (it.isFocused || it.hasFocus) }
-            .clickable(enabled = enabled, onClick = onClick)
-            .focusable(enabled = enabled),
+            .clickable(enabled = enabled, onClick = onClick),
         shape = shape,
         color = when {
             !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
@@ -1202,6 +1117,20 @@ private fun HomeApiLineSetting(
     onOpenConfig: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val lineFocus = remember { FocusRequester() }
+    RestoreFocusOnClose(expanded, lineFocus)
+    if (expanded) {
+        com.tvbox.app.ui.components.OptionPickerDialog(
+            title = "选择视频接口",
+            labels = apiLines.map { it.name },
+            selectedIndex = apiLines.indexOfFirst { it.id == selectedApiLine?.id }.coerceAtLeast(0),
+            onSelect = { index ->
+                expanded = false
+                onSelect(apiLines[index].id)
+            },
+            onDismiss = { expanded = false },
+        )
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1227,30 +1156,12 @@ private fun HomeApiLineSetting(
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box {
-                SettingsActionButton(
-                    text = "${selectedApiLine?.name ?: "选择资源"} ▾",
-                    enabled = apiLines.isNotEmpty(),
-                    onClick = { expanded = true },
-                )
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                ) {
-                    apiLines.forEach { line ->
-                        val selected = line.id == selectedApiLine?.id
-                        DropdownMenuItem(
-                            text = {
-                                Text(if (selected) "已选 · ${line.name}" else line.name)
-                            },
-                            onClick = {
-                                expanded = false
-                                onSelect(line.id)
-                            },
-                        )
-                    }
-                }
-            }
+            SettingsActionButton(
+                text = "${selectedApiLine?.name ?: "选择资源"} ▾",
+                enabled = apiLines.isNotEmpty(),
+                onClick = { expanded = true },
+                modifier = Modifier.focusRequester(lineFocus),
+            )
             SettingsActionButton(
                 text = "添加接口",
                 onClick = onOpenConfig,
@@ -1345,6 +1256,17 @@ private fun MovieGrid(
     modifier: Modifier = Modifier,
 ) {
     var loadMoreFocused by remember { mutableStateOf(false) }
+    val compact = LocalConfiguration.current.screenWidthDp < 760
+    val compactHeight = LocalConfiguration.current.screenHeightDp < 560
+    val recentCardWidth = if (compact) 174.dp else 220.dp
+    val posterGridMinWidth = if (compact) 112.dp else TvLayout.PosterGridMinWidth
+    val posterAspectRatio = when {
+        compactHeight -> 0.9f
+        compact -> 0.82f
+        else -> 0.78f
+    }
+    val horizontalGap = if (compact) 12.dp else 18.dp
+    val verticalGap = if (compact) 12.dp else 22.dp
     val contextKey = "${state.selectedApiLineId}:${state.homeFeedMode}:${state.selectedParentCategoryId}:${state.selectedCategoryId}"
     var savedContext by rememberSaveable { mutableStateOf(contextKey) }
     LaunchedEffect(contextKey) {
@@ -1356,13 +1278,15 @@ private fun MovieGrid(
         loadMoreFocused = false
     }
     val recent = state.historyItems.continueWatching()
+    var focusedItemIndex by remember(contextKey) { mutableStateOf<Int?>(null) }
     val itemOffset = (if (recent.isNotEmpty()) 1 else 0) + (if (state.homeNotice != null) 1 else 0)
+    val firstContentIndex = if (recent.isNotEmpty()) 0 else itemOffset
     val focusItems = recent.map { "continue:${it.apiLineId}:${it.movieId}" to 0 } +
         if (state.isShowingDoubanHot) state.doubanHotMovies.mapIndexed { index, item -> "douban:${item.doubanId}" to index + itemOffset }
         else state.movies.mapIndexed { index, movie -> "${movie.apiLineId}:${movie.id}" to index + itemOffset }
     RestoreGridFocus(focus, gridState, focusItems)
     Column(modifier = modifier.fillMaxSize()) {
-        if (showSectionHeader) {
+            if (showSectionHeader) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1381,13 +1305,30 @@ private fun MovieGrid(
                 )
             }
         }
+        // 网格顶部向上按方向键时主动把焦点交回顶部导航，修复无历史记录时向上无出口
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = TvLayout.PosterGridMinWidth),
+            columns = GridCells.Adaptive(minSize = posterGridMinWidth),
             state = gridState,
             contentPadding = PaddingValues(bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            verticalArrangement = Arrangement.spacedBy(22.dp),
-            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(horizontalGap),
+            verticalArrangement = Arrangement.spacedBy(verticalGap),
+            modifier = Modifier
+                .weight(1f)
+                .onPreviewKeyEvent { event ->
+                    val isUp = event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP
+                    val focusedIndex = focusedItemIndex ?: return@onPreviewKeyEvent false
+                    val layoutItems = gridState.layoutInfo.visibleItemsInfo
+                    val firstRow = layoutItems
+                        .firstOrNull { it.index == firstContentIndex }?.row
+                    val focusedRow = layoutItems
+                        .firstOrNull { it.index == focusedIndex }?.row
+                    if (isUp && firstRow != null && focusedRow == firstRow) {
+                        if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                            onMoveToNavigation()
+                        }
+                        true
+                    } else false
+                },
         ) {
             if (recent.isNotEmpty()) {
                 item(key = "continue-watching", span = { GridItemSpan(maxLineSpan) }) {
@@ -1409,8 +1350,13 @@ private fun MovieGrid(
                                     focus.mark("continue:${history.apiLineId}:${history.movieId}", 0)
                                     onContinue(history)
                                 },
-                                    Modifier.width(220.dp).then(focus.modifier("continue:${history.apiLineId}:${history.movieId}", 0))
-                                        .onFocusChanged { if (it.hasFocus) onContentFocused() })
+                                    Modifier.width(recentCardWidth).then(focus.modifier("continue:${history.apiLineId}:${history.movieId}", 0))
+                                        .onFocusChanged {
+                                            if (it.isFocused) {
+                                                focusedItemIndex = 0
+                                                onContentFocused()
+                                            }
+                                        })
                             }
                         }
                     }
@@ -1427,7 +1373,10 @@ private fun MovieGrid(
                     ) {
                         Text(
                             text = notice,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                modifier = Modifier.padding(
+                                horizontal = 14.dp,
+                                vertical = if (compactHeight) 7.dp else 10.dp,
+                            ),
                             color = TvColors.TextSecondary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -1444,8 +1393,13 @@ private fun MovieGrid(
                             onDoubanHotClick(item)
                         },
                         modifier = focus.modifier("douban:${item.doubanId}", state.doubanHotMovies.indexOf(item) + itemOffset)
-                            .onFocusChanged { if (it.hasFocus) onContentFocused() },
-                        posterAspectRatio = 0.78f,
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    focusedItemIndex = state.doubanHotMovies.indexOf(item) + itemOffset
+                                    onContentFocused()
+                                }
+                            },
+                        posterAspectRatio = posterAspectRatio,
                     )
                 }
             } else {
@@ -1457,8 +1411,13 @@ private fun MovieGrid(
                             onMovieClick(movie.id)
                         },
                         modifier = focus.modifier("${movie.apiLineId}:${movie.id}", state.movies.indexOf(movie) + itemOffset)
-                            .onFocusChanged { if (it.hasFocus) onContentFocused() },
-                        posterAspectRatio = 0.78f,
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    focusedItemIndex = state.movies.indexOf(movie) + itemOffset
+                                    onContentFocused()
+                                }
+                            },
+                        posterAspectRatio = posterAspectRatio,
                     )
                 }
             }

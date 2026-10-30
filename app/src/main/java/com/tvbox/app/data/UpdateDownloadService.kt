@@ -141,7 +141,7 @@ class UpdateDownloadService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val progress = if (total > 0) ((received * 100) / total).toInt().coerceIn(0, 99) else 0
         return Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("TVBox 更新下载").setContentText(if (total > 0) "$progress%" else "正在下载")
+            .setContentTitle("小鸡影视更新下载").setContentText(if (total > 0) "$progress%" else "正在下载")
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .setProgress(100, progress, total <= 0).build()
     }

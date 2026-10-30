@@ -38,7 +38,7 @@ internal class UpdateApkExporter(context: Context) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, fileName)
                 put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
-                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/TVBox")
+                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/小鸡影视")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -48,14 +48,14 @@ internal class UpdateApkExporter(context: Context) {
                     ?: throw IOException("无法写入下载目录")
                 val finished = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
                 if (resolver.update(uri, finished, null, null) <= 0) throw IOException("无法完成安装包保存")
-                "下载/TVBox/$fileName"
+                "下载/小鸡影视/$fileName"
             } catch (error: Exception) {
                 runCatching { resolver.delete(uri, null, null) }
                 throw error
             }
         } else {
             @Suppress("DEPRECATION")
-            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "TVBox")
+            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "小鸡影视")
             if (!directory.isDirectory && !directory.mkdirs()) throw IOException("无法创建下载目录，请检查存储权限")
             var outputFile = File(directory, fileName)
             var suffix = 1

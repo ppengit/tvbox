@@ -251,10 +251,10 @@ class MainActivity : ComponentActivity() {
         val version = viewModel.state.value.availableUpdate?.versionName.orEmpty()
             .replace(Regex("[^A-Za-z0-9._-]"), "_")
         try {
-            saveApkLauncher.launch("TVBox-v$version.apk")
+            saveApkLauncher.launch("小鸡影视-v$version.apk")
         } catch (error: Exception) {
             Log.w("TVBoxUpdate", "No document picker; exporting to public Downloads", error)
-            Toast.makeText(this, "系统没有可用的文件选择器，将保存到下载目录的 TVBox 文件夹", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "系统没有可用的文件选择器，将保存到下载目录的「小鸡影视」文件夹", Toast.LENGTH_LONG).show()
             if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 try { exportStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) }
@@ -286,7 +286,7 @@ class MainActivity : ComponentActivity() {
         if (!canInstallUnknownApps()) {
             requestInstallPermission(
                 action = InstallPermissionAction.InstallDownloadedApk(apkPath),
-                message = "请允许 TVBox 安装未知应用，允许后将继续安装更新。",
+                message = "请允许「小鸡影视」安装未知应用，允许后将继续安装更新。",
             )
             return
         }
@@ -307,7 +307,7 @@ class MainActivity : ComponentActivity() {
         for (action in listOf(Intent.ACTION_VIEW, Intent.ACTION_INSTALL_PACKAGE)) {
             val intent = Intent(action).apply {
                 setDataAndType(apkUri, APK_MIME_TYPE)
-                clipData = ClipData.newRawUri("TVBox update", apkUri)
+                clipData = ClipData.newRawUri("小鸡影视更新包", apkUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             try {
@@ -327,7 +327,7 @@ class MainActivity : ComponentActivity() {
         val apkPath = viewModel.state.value.updateDownloadedApkPath ?: return
         if (permissionSettingsOpen) return
         requestInstallPermission(InstallPermissionAction.InstallDownloadedApk(apkPath),
-            "请在系统设置中允许 TVBox 安装未知应用，授权后返回即可继续安装", generalSettingsOnly = true)
+            "请在系统设置中允许「小鸡影视」安装未知应用，授权后返回即可继续安装", generalSettingsOnly = true)
     }
 
     private fun requestInstallPermission(
@@ -368,7 +368,7 @@ class MainActivity : ComponentActivity() {
                 Log.w("TVBoxUpdate", "Unable to open permission settings: ${intent.action}", error)
             }
         }
-        val failureMessage = "无法打开安装权限设置。安装包已保留，请在系统设置中允许 TVBox 安装未知应用"
+        val failureMessage = "无法打开安装权限设置。安装包已保留，请在系统设置中允许「小鸡影视」安装未知应用"
         viewModel.awaitUpdateInstallPermission(apkPath, failureMessage)
         Toast.makeText(this, failureMessage, Toast.LENGTH_LONG).show()
     }

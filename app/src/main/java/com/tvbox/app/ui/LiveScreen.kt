@@ -56,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
@@ -82,6 +83,7 @@ import com.tvbox.app.domain.DeviceMode
 import com.tvbox.app.ui.components.ErrorState
 import com.tvbox.app.ui.components.LoadingState
 import com.tvbox.app.ui.components.PageSurface
+import com.tvbox.app.ui.components.requestFocusWhenReady
 import kotlinx.coroutines.delay
 
 @Composable
@@ -214,7 +216,6 @@ private fun LivePlayerScreen(
     BackHandler(enabled = channelListVisible) {
         channelListVisible = false
         showMobileControls()
-        if (isTelevision) playerFocusRequester.requestFocus()
     }
 
     DisposableEffect(activity, initialRequestedOrientation, isTelevision) {
@@ -321,15 +322,16 @@ private fun LivePlayerScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        playerFocusRequester.requestFocus()
+    LaunchedEffect(isTelevision, channelListVisible) {
+        if (isTelevision && !channelListVisible) {
+            playerFocusRequester.requestFocusWhenReady()
+        }
     }
 
     LaunchedEffect(isTelevision, channelListVisible, channelListInteraction) {
         if (!isTelevision || !channelListVisible) return@LaunchedEffect
         delay(CHANNEL_LIST_HIDE_DELAY_MS)
         channelListVisible = false
-        playerFocusRequester.requestFocus()
     }
 
     LaunchedEffect(isTelevision, mobileControlsVisible, mobileControlsInteraction, channelListVisible) {
@@ -361,6 +363,7 @@ private fun LivePlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .focusRequester(playerFocusRequester)
+            .focusProperties { canFocus = !channelListVisible }
             .pointerInput(channels.size, isTelevision) {
                 detectTapGestures(
                     onTap = {
@@ -384,8 +387,31 @@ private fun LivePlayerScreen(
                 )
             }
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                if (channelListVisible) {
+                    keepChannelListVisibleWhileBrowsing()
+                    return@onPreviewKeyEvent false
+                }
+                if (event.type == KeyEventType.KeyDown) {
+                    return@onPreviewKeyEvent event.nativeKeyEvent.keyCode in listOf(
+                        AndroidKeyEvent.KEYCODE_DPAD_LEFT,
+                        AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                        AndroidKeyEvent.KEYCODE_DPAD_UP,
+                        AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                        AndroidKeyEvent.KEYCODE_DPAD_CENTER,
+                        AndroidKeyEvent.KEYCODE_ENTER,
+                        AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                        AndroidKeyEvent.KEYCODE_MEDIA_PLAY,
+                        AndroidKeyEvent.KEYCODE_MEDIA_PAUSE,
+                    )
+                }
                 when (event.nativeKeyEvent.keyCode) {
+                    AndroidKeyEvent.KEYCODE_BACK -> {
+                        // 频道列表打开时返回键先关闭列表，由 BackHandler 兜底退出页面
+                        if (channelListVisible) {
+                            channelListVisible = false
+                            true
+                        } else false
+                    }
                     AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
                         actions.playPreviousLiveChannel()
                         true
@@ -407,22 +433,17 @@ private fun LivePlayerScreen(
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                        if (channelListVisible) {
-                            actions.playPreviousLiveChannel()
-                            keepChannelListVisibleWhileBrowsing()
-                        } else {
+                        // 列表打开时把方向键让给列表内部移动，不再切台
+                        if (channelListVisible) false else {
                             actions.playPreviousLiveLine()
+                            true
                         }
-                        true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (channelListVisible) {
-                            actions.playNextLiveChannel()
-                            keepChannelListVisibleWhileBrowsing()
-                        } else {
+                        if (channelListVisible) false else {
                             actions.playNextLiveLine()
+                            true
                         }
-                        true
                     }
                     AndroidKeyEvent.KEYCODE_0,
                     AndroidKeyEvent.KEYCODE_NUMPAD_0,
@@ -506,6 +527,7 @@ private fun LivePlayerScreen(
                     .fillMaxHeight()
                     .width((maxWidth * MOBILE_LANDSCAPE_CHANNEL_PANEL_WIDTH_FRACTION).coerceIn(240.dp, 340.dp))
             }
+            // 列表弹出时把焦点抢进列表，按 BACK 或选中后归还播放器
             LiveChannelList(
                 channels = channels,
                 selectedIndex = state.liveChannelIndex,
@@ -514,7 +536,6 @@ private fun LivePlayerScreen(
                     {
                         channelListVisible = false
                         showMobileControls()
-                        playerFocusRequester.requestFocus()
                     }
                 },
                 onChannelClick = { index ->
@@ -522,7 +543,6 @@ private fun LivePlayerScreen(
                     channelListVisible = false
                     showPrompt(channels[index].name)
                     showMobileControls()
-                    if (isTelevision) playerFocusRequester.requestFocus()
                 },
                 onInteraction = ::keepChannelListVisibleWhileBrowsing,
                 modifier = channelPanelModifier,
@@ -622,9 +642,11 @@ private fun LiveChannelList(
 ) {
     val listState = rememberLazyListState()
     val safeSelectedIndex = selectedIndex.coerceIn(0, channels.lastIndex)
-
+    // 当前选中行的 FocusRequester，列表弹出时主动把焦点拉到这里
+    val selectedFocusRequester = remember { FocusRequester() }
     LaunchedEffect(safeSelectedIndex) {
-        listState.animateScrollToItem(safeSelectedIndex)
+        listState.scrollToItem(safeSelectedIndex)
+        selectedFocusRequester.requestFocusWhenReady()
     }
 
     Surface(
@@ -681,6 +703,9 @@ private fun LiveChannelList(
                         channel = channel,
                         selected = index == safeSelectedIndex,
                         onClick = { onChannelClick(index) },
+                        modifier = if (index == safeSelectedIndex) {
+                            Modifier.focusRequester(selectedFocusRequester)
+                        } else Modifier,
                     )
                 }
             }
@@ -694,6 +719,7 @@ private fun LiveChannelRow(
     channel: LiveChannel,
     selected: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
     val accent = Color(0xFF7AE2BA)
@@ -701,7 +727,7 @@ private fun LiveChannelRow(
     val contentColor = Color.White.copy(alpha = if (selected || focused) 1f else 0.78f)
     val shape = RoundedCornerShape(10.dp)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(shape)
             .background(background)
@@ -821,7 +847,7 @@ private fun Context.findActivityForLive(): Activity? = when (this) {
     else -> null
 }
 
-private const val CHANNEL_LIST_HIDE_DELAY_MS = 2_000L
+private const val CHANNEL_LIST_HIDE_DELAY_MS = 8_000L
 private const val MOBILE_CONTROLS_HIDE_DELAY_MS = 4_000L
 private const val CHANNEL_BADGE_HIDE_DELAY_MS = 2_000L
 private const val CHANNEL_NUMBER_COMMIT_DELAY_MS = 1_000L

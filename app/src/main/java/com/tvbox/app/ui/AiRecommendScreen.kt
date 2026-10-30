@@ -200,8 +200,7 @@ private fun AiActionButton(
             )
             .clip(shape)
             .onFocusChanged { focused = enabled && (it.isFocused || it.hasFocus) }
-            .clickable(enabled = enabled, onClick = onClick)
-            .focusable(enabled = enabled),
+            .clickable(enabled = enabled, onClick = onClick),
         shape = shape,
         color = when {
             !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
@@ -258,8 +257,7 @@ private fun AiRecommendationCard(
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier

@@ -183,7 +183,7 @@ class AiConfigServer(
             <head>
               <meta charset="utf-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>TVBox AI 配置</title>
+              <title>小鸡影视 AI 配置</title>
               <style>
                 body { margin: 0; font-family: sans-serif; background: #10141f; color: #f5f7fb; }
                 main { max-width: 520px; margin: 0 auto; padding: 28px 18px; }
@@ -198,7 +198,7 @@ class AiConfigServer(
             </head>
             <body>
               <main>
-                <h1>TVBox AI 配置</h1>
+                <h1>小鸡影视 AI 配置</h1>
                 <div class="panel">
                   <p>当前大模型：<strong>${provider.name.htmlEscape()}</strong></p>
                   <p>填写后会自动同步到电视。API Key 只保存在电视本机。</p>

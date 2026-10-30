@@ -7,6 +7,7 @@ import com.tvbox.app.domain.CustomVideoApiLine
 import com.tvbox.app.domain.TvFontScale
 import com.tvbox.app.domain.TvTheme
 import com.tvbox.app.domain.VideoScaleMode
+import com.tvbox.app.domain.PlayerRemotePolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -43,6 +44,8 @@ class SharedAppSettingsRepository(context: Context) : AppSettingsRepository {
             playbackAgentAutoSwitchEnabled = prefs.getBoolean(KEY_PLAYBACK_AGENT_AUTO_SWITCH, true),
             videoScaleMode = VideoScaleMode.fromStorageKey(prefs.getString(KEY_VIDEO_SCALE_MODE, null)),
             deviceMode = DeviceMode.fromStorageKey(prefs.getString(KEY_DEVICE_MODE, null)),
+            preferredPlaybackSpeed = runCatching { prefs.getFloat(KEY_PLAYBACK_SPEED, 1f) }
+                .getOrDefault(1f).takeIf { it in PlayerRemotePolicy.speedOptions } ?: 1f,
         )
     }
 
@@ -59,6 +62,7 @@ class SharedAppSettingsRepository(context: Context) : AppSettingsRepository {
             .putBoolean(KEY_PLAYBACK_AGENT_AUTO_SWITCH, settings.playbackAgentAutoSwitchEnabled)
             .putString(KEY_VIDEO_SCALE_MODE, settings.videoScaleMode.storageKey)
             .putString(KEY_DEVICE_MODE, settings.deviceMode.storageKey)
+            .putFloat(KEY_PLAYBACK_SPEED, settings.preferredPlaybackSpeed.takeIf { it in PlayerRemotePolicy.speedOptions } ?: 1f)
             .apply()
         settings
     }
@@ -82,5 +86,6 @@ class SharedAppSettingsRepository(context: Context) : AppSettingsRepository {
         const val KEY_PLAYBACK_AGENT_AUTO_SWITCH = "playback_agent_auto_switch"
         const val KEY_VIDEO_SCALE_MODE = "video_scale_mode"
         const val KEY_DEVICE_MODE = "device_mode"
+        const val KEY_PLAYBACK_SPEED = "preferred_playback_speed"
     }
 }

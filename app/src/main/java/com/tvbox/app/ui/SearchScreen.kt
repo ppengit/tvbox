@@ -26,10 +26,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import android.view.KeyEvent as AndroidKeyEvent
+import kotlinx.coroutines.launch
+import com.tvbox.app.ui.components.EmptyState
+import com.tvbox.app.ui.components.requestFocusWhenReady
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -50,6 +60,13 @@ fun SearchScreen(
 ) {
     val grid = rememberLazyGridState()
     val returnFocus = rememberReturnFocus()
+    val inputFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    var focusedResultIndex by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(Unit) {
+        if (returnFocus.lastKey == null) inputFocus.requestFocusWhenReady()
+    }
     var savedQuery by rememberSaveable { mutableStateOf(state.searchQuery) }
     var fieldValue by remember { mutableStateOf(queryFieldValue(state.searchQuery)) }
     LaunchedEffect(state.searchQuery) {
@@ -84,16 +101,25 @@ fun SearchScreen(
                         fieldValue = it
                         actions.updateSearchQuery(it.text)
                     },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).focusRequester(inputFocus),
                     singleLine = true,
                     label = { Text("影片名称") },
+                    trailingIcon = {
+                        if (fieldValue.text.isNotEmpty()) {
+                            androidx.compose.material3.TextButton(onClick = {
+                                fieldValue = queryFieldValue("")
+                                actions.updateSearchQuery("")
+                                scope.launch { inputFocus.requestFocusWhenReady() }
+                            }) { Text("清除") }
+                        }
+                    },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { actions.submitSearch() }),
                 )
                 SearchActionButton(
                     text = if (state.searchLoading) "搜索中" else "搜索",
-                    onClick = actions::submitSearch,
-                    enabled = !state.searchLoading,
+                    onClick = { if (!state.searchLoading) actions.submitSearch() },
+                    modifier = Modifier.focusRequester(searchFocus),
                 )
                 SearchActionButton(text = "返回", onClick = actions::goBack)
             }
@@ -108,6 +134,12 @@ fun SearchScreen(
                 state.searchError != null && state.searchResults.isEmpty() -> ErrorState(
                     message = state.searchError,
                     onRetry = actions::submitSearch,
+                )
+                state.searchResults.isEmpty() -> EmptyState(
+                    title = if (state.searchTotalSources > 0) "没有找到相关影片" else "想看什么，搜一下",
+                    subtitle = if (state.searchTotalSources > 0) "试试更简短的片名，或在设置中切换影视接口" else "支持多个影视来源，方向键浏览结果，确认键打开详情",
+                    actionLabel = "编辑关键词",
+                    onAction = { scope.launch { inputFocus.requestFocusWhenReady() } },
                 )
                 else -> Column(modifier = Modifier.fillMaxSize()) {
                     searchProgress?.let { progress ->
@@ -124,7 +156,17 @@ fun SearchScreen(
                         contentPadding = PaddingValues(bottom = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(18.dp),
                         verticalArrangement = Arrangement.spacedBy(22.dp),
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+                            val firstRow = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.index == 0 }?.row
+                            val focusedRow = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusedResultIndex }?.row
+                            if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP &&
+                                firstRow != null && focusedRow == firstRow) {
+                                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                                    scope.launch { searchFocus.requestFocusWhenReady() }
+                                }
+                                true
+                            } else false
+                        },
                     ) {
                         items(state.searchResults, key = { "${it.apiLineId}-${it.id}" }) { movie ->
                             MoviePosterCard(
@@ -133,7 +175,8 @@ fun SearchScreen(
                                     returnFocus.mark("${movie.apiLineId}:${movie.id}", state.searchResults.indexOf(movie))
                                     actions.openDetail(movie.id, movie.apiLineId)
                                 },
-                                modifier = returnFocus.modifier("${movie.apiLineId}:${movie.id}", state.searchResults.indexOf(movie)),
+                                modifier = returnFocus.modifier("${movie.apiLineId}:${movie.id}", state.searchResults.indexOf(movie))
+                                    .onFocusChanged { if (it.isFocused) focusedResultIndex = state.searchResults.indexOf(movie) },
                             )
                         }
                     }
@@ -154,13 +197,14 @@ private fun SearchActionButton(
     text: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(50)
     var focused by remember { mutableStateOf(false) }
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier
+        modifier = modifier
             .tvFocusScale(
                 shape = shape,
                 focusedBorder = TvColors.FocusRing,

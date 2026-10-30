@@ -64,6 +64,7 @@ import com.tvbox.app.domain.PlaybackIssueNotice
 import com.tvbox.app.domain.PlaybackResumeAnchor
 import com.tvbox.app.domain.SlowBufferReason
 import com.tvbox.app.ui.components.ErrorState
+import com.tvbox.app.ui.components.requestFocusWhenReady
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -127,7 +128,7 @@ fun PlayerScreen(
     BackHandler {
         when {
             controlsPanel != PlayerPanel.None -> controlsPanel = PlayerPanel.None
-            controlsVisible -> { controlsVisible = false; playerFocusRequester.requestFocus() }
+            controlsVisible -> controlsVisible = false
             else -> actions.goBack()
         }
     }
@@ -146,7 +147,6 @@ fun PlayerScreen(
         if (controlsVisible && controlsPanel == PlayerPanel.None && uiPlaying && !scrubbing) {
             delay(5_000)
             controlsVisible = false
-            playerFocusRequester.requestFocus()
         }
     }
     LaunchedEffect(session.interrupted) {
@@ -534,6 +534,7 @@ fun PlayerScreen(
         val nextSpeed = nextPlaybackSpeed(latestState.playerSpeed)
         player.setPlaybackSpeed(nextSpeed)
         actions.updatePlaybackSpeed(nextSpeed)
+        actions.setPreferredPlaybackSpeed(nextSpeed)
         seekGesturePrompt = "当前倍速 ${formatPlaybackSpeed(nextSpeed)}"
         seekGesturePromptNonce++
     }
@@ -569,6 +570,16 @@ fun PlayerScreen(
                             }
                             true
                         } else false
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_UP,
+                    AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                    -> {
+                        // 控制栏已隐藏时，按上下方向键重新打开控制栏，避免焦点陷入黑盒 Box
+                        if (!controlsVisible && event.type == KeyEventType.KeyUp) {
+                            controlsVisible = true
+                            controlsInteraction++
+                        }
+                        true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_LEFT,
                     AndroidKeyEvent.KEYCODE_MEDIA_REWIND,
@@ -831,7 +842,12 @@ fun PlayerScreen(
                     actions.switchPlayerSource(index, resumeAnchor.positionForFailure(player.currentPosition), player.playWhenReady)
                     controlsInteraction++
                 },
-                onSpeed = { speed -> player.setPlaybackSpeed(speed); actions.updatePlaybackSpeed(speed); controlsInteraction++ },
+                onSpeed = { speed ->
+                    player.setPlaybackSpeed(speed)
+                    actions.updatePlaybackSpeed(speed)
+                    actions.setPreferredPlaybackSpeed(speed)
+                    controlsInteraction++
+                },
                 onVideoScale = { mode -> actions.updateVideoScaleMode(mode); controlsInteraction++ },
                 onSeek = { position ->
                     bufferMonitor.onSeekStarted(System.currentTimeMillis())
@@ -1067,15 +1083,13 @@ private const val DEFAULT_SYSTEM_BRIGHTNESS = 128
 private const val MAX_SYSTEM_BRIGHTNESS = 255f
 private const val PORTRAIT_VIDEO_ASPECT_RATIO_MAX = 0.8f
 private const val LANDSCAPE_VIDEO_ASPECT_RATIO_MIN = 1.1f
-private val PLAYBACK_SPEEDS = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
+private val PLAYBACK_SPEEDS = com.tvbox.app.domain.PlayerRemotePolicy.speedOptions
 
-private fun nextPlaybackSpeed(currentSpeed: Float): Float {
-    val currentIndex = PLAYBACK_SPEEDS.indexOfFirst { abs(it - currentSpeed) < 0.01f }
-    return PLAYBACK_SPEEDS[(currentIndex + 1).coerceAtLeast(0) % PLAYBACK_SPEEDS.size]
-}
+private fun nextPlaybackSpeed(currentSpeed: Float): Float =
+    com.tvbox.app.domain.PlayerRemotePolicy.nextSpeed(currentSpeed)
 
 private fun formatPlaybackSpeed(speed: Float): String {
-    return "${speed.toString().trimEnd('0').trimEnd('.')}x"
+    return if (speed % 1f == 0f) "${speed.toInt()}x" else "${speed}x"
 }
 
 private fun PlaybackAgentDecision.toPlaybackNotice(prefix: String): String {

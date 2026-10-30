@@ -36,16 +36,18 @@ internal fun rememberReturnFocus(): ReturnFocus {
 @Composable
 internal fun RestoreGridFocus(focus: ReturnFocus, grid: LazyGridState, items: List<Pair<String, Int>>) {
     var restored by remember { mutableStateOf(false) }
-    LaunchedEffect(items.isNotEmpty()) {
+    LaunchedEffect(items) {
         if (restored || items.isEmpty() || focus.lastKey == null) return@LaunchedEffect
         val target = items.firstOrNull { it.first == focus.lastKey }
             ?: items.minByOrNull { kotlin.math.abs(it.second - focus.lastIndex) } ?: return@LaunchedEffect
         withFrameNanos { }
         if (grid.layoutInfo.visibleItemsInfo.none { it.index == target.second }) grid.scrollToItem(target.second)
-        for (attempt in 0..12) {
+        repeat(45) {
             withFrameNanos { }
-            if (focus.request(target.first)) break
+            if (focus.request(target.first)) {
+                restored = true
+                return@LaunchedEffect
+            }
         }
-        restored = true
     }
 }

@@ -9,6 +9,9 @@ signing/
 *.jks
 *.keystore
 
+# 本地构建产物
+dist/
+
 # Python acceptance tooling caches
 __pycache__/
 *.py[cod]

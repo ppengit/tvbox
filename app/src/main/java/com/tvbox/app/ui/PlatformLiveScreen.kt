@@ -74,6 +74,7 @@ import com.tvbox.app.ui.components.ErrorState
 import com.tvbox.app.ui.components.LoadingState
 import com.tvbox.app.ui.components.PageSurface
 import com.tvbox.app.ui.components.tvFocusScale
+import com.tvbox.app.ui.components.requestFocusWhenReady
 import com.tvbox.app.ui.theme.TvLayout
 import kotlinx.coroutines.delay
 
@@ -445,7 +446,6 @@ private fun PlatformLiveTextCard(
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
-            .focusable()
             .padding(22.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -483,8 +483,7 @@ private fun PlatformLiveImageCard(
                 .clip(shape)
                 .onFocusChanged { focused = it.isFocused || it.hasFocus }
                 .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
-                .clickable(onClick = onClick)
-                .focusable(),
+                .clickable(onClick = onClick),
         ) {
             Box(
                 modifier = Modifier
@@ -660,7 +659,7 @@ private fun PlatformLivePlayerScreen(
         }
     }
 
-    LaunchedEffect(Unit) { playerFocusRequester.requestFocus() }
+    LaunchedEffect(Unit) { playerFocusRequester.requestFocusWhenReady() }
 
     Box(
         modifier = Modifier
@@ -668,8 +667,18 @@ private fun PlatformLivePlayerScreen(
             .background(Color.Black)
             .focusRequester(playerFocusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
-                when (event.nativeKeyEvent.keyCode) {
+                val code = event.nativeKeyEvent.keyCode
+                if (code !in listOf(
+                    AndroidKeyEvent.KEYCODE_DPAD_LEFT,
+                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                    AndroidKeyEvent.KEYCODE_DPAD_CENTER,
+                    AndroidKeyEvent.KEYCODE_ENTER,
+                    AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                    AndroidKeyEvent.KEYCODE_DPAD_UP,
+                    AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                )) return@onPreviewKeyEvent false
+                if (event.type == KeyEventType.KeyDown) return@onPreviewKeyEvent true
+                when (code) {
                     AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
                         actions.playPreviousPlatformLiveRoom()
                         true
@@ -687,6 +696,13 @@ private fun PlatformLivePlayerScreen(
                             actions.reconnectPlatformLiveChannel()
                         } else if (state.platformLiveError != null) actions.reconnectPlatformLiveChannel()
                         badgeVisible = true
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_UP,
+                    AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                    -> {
+                        // 平台直播页上下键原先完全无响应；改为切换信息徽标，提供可感知反馈
+                        badgeVisible = !badgeVisible
                         true
                     }
                     else -> false

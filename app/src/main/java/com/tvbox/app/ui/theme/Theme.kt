@@ -22,6 +22,7 @@ data class TvColorTokens(
     val surface: Color,
     val surfaceRaised: Color,
     val surfaceOverlay: Color,
+    val contentBackdrop: Color,
     val border: Color,
     val textPrimary: Color,
     val textSecondary: Color,
@@ -40,6 +41,7 @@ private val DefaultTokens = TvColorTokens(
     surface = Color(0xFF181818),
     surfaceRaised = Color(0xFF252525),
     surfaceOverlay = Color(0xE6181818),
+    contentBackdrop = Color(0xFF0B0E0E),
     border = Color(0x664D4D4D),
     textPrimary = Color.White,
     textSecondary = Color(0xFFB3B3B3),
@@ -58,6 +60,7 @@ private val CinemaTokens = TvColorTokens(
     surface = Color(0xFF121716),
     surfaceRaised = Color(0xFF1A211E),
     surfaceOverlay = Color(0xCC0C1110),
+    contentBackdrop = Color(0xFF060808),
     border = Color(0x3357635C),
     textPrimary = Color(0xFFF5F8F6),
     textSecondary = Color(0xFFA6B0AA),
@@ -112,6 +115,7 @@ object TvColors {
     val Surface: Color @Composable get() = LocalTvColors.current.surface
     val SurfaceRaised: Color @Composable get() = LocalTvColors.current.surfaceRaised
     val SurfaceOverlay: Color @Composable get() = LocalTvColors.current.surfaceOverlay
+    val ContentBackdrop: Color @Composable get() = LocalTvColors.current.contentBackdrop
     val Border: Color @Composable get() = LocalTvColors.current.border
     val TextPrimary: Color @Composable get() = LocalTvColors.current.textPrimary
     val TextSecondary: Color @Composable get() = LocalTvColors.current.textSecondary
@@ -139,7 +143,7 @@ object TvDimens {
     val PageVerticalPadding = 24.dp
     val SectionGap = 16.dp
     val CardRadius = 12.dp
-    val FocusScale = 1.04f
+    val FocusScale = 1.06f
 }
 
 private fun colorScheme(tokens: TvColorTokens): ColorScheme = darkColorScheme(

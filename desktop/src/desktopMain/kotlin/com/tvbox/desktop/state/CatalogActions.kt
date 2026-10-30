@@ -501,6 +501,9 @@ fun DesktopAppState.resumeHistory(item: WatchHistoryItem) {
             }
             val (sourceIndex, episodeIndex) = resolveHistoryEpisodePosition(movie, item)
             if (openedMovie == null) {
+                val cachedSpeeds = runCatching {
+                    speedCacheRepository.loadSourceSpeeds(movieSpeedCacheKey(movie.apiLineId, movie.id))
+                }.getOrNull()
                 setDetail(
                     DetailState(
                         movie = movie,
@@ -508,6 +511,8 @@ fun DesktopAppState.resumeHistory(item: WatchHistoryItem) {
                         loading = false,
                         sourceIndex = sourceIndex,
                         episodeIndex = episodeIndex,
+                        sourceSpeeds = cachedSpeeds?.toResultsByIndex(movie.playSources).orEmpty(),
+                        sourceSpeedsMeasuredAtMs = cachedSpeeds?.measuredAtMs ?: 0L,
                         policy = runCatching {
                             playbackPolicyRepository.find(movie.apiLineId, movie.id)
                         }.getOrNull(),

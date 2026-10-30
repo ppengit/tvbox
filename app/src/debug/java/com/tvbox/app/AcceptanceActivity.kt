@@ -41,8 +41,12 @@ class AcceptanceActivity : ComponentActivity() {
                         override suspend fun getSettings() = settings
                         override suspend fun saveSettings(settings: AppSettings): AppSettings { this.settings = settings; return settings }
                     },
-                    historyRepository = SharedHistoryRepository(this@AcceptanceActivity),
-                    platformLiveFavoritesRepository = SharedPlatformLiveFavoritesRepository(this@AcceptanceActivity),
+                    historyRepository = PersistentHistoryRepository(
+                        PreferenceKeyValueStore(this@AcceptanceActivity, AppStorageNames.HISTORY),
+                    ),
+                    platformLiveFavoritesRepository = PersistentPlatformLiveFavoritesRepository(
+                        PreferenceKeyValueStore(this@AcceptanceActivity, AppStorageNames.PLATFORM_LIVE_FAVORITES),
+                    ),
                 ) as T
             }
         }

@@ -15,3 +15,6 @@ dist/
 # Python acceptance tooling caches
 __pycache__/
 *.py[cod]
+
+# ZCode 本地会话与计划
+.zcode/

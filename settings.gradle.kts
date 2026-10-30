@@ -16,4 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "TVBox"
 include(":app")
-
+include(":core")
+include(":desktop")

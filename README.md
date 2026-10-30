@@ -6,6 +6,30 @@ TVBox 是一个面向 Android TV / 电视盒子的影视播放应用，使用 Ko
 
 > 请确保使用的影视与直播接口具备合法授权。本项目仅提供客户端能力，不内置或托管影视内容。
 
+## Windows 桌面版
+
+仓库同时包含独立的 Windows 桌面客户端（`desktop/`，Compose Multiplatform Desktop + libmpv），与电视端共享 `core/` 中的数据源、聚合、历史与播放策略，但不包含语音找片、扫码配置和 APK 更新等电视专属能力。
+
+桌面前端按桌面使用习惯重新设计，而不是复用电视 UI：
+
+- 左侧常驻导航 + 右侧内容区，窗口宽度低于 1440dp 时侧栏自动收成图标栏，低于 1120dp 时收窄内容边距。
+- 首页“继续观看”直接读取观看历史并按剧名去重，推荐位与下方网格自动排除已展示内容。
+- 片库的“类型 / 年份 / 地区 / 语言”统一为文字筛选，支持折叠、清除附加条件和分页加载；子类在源站不存在时跳过该源，不会退回父类混入整个大类。
+- 详情页按窗口宽度自适应，播放线路可展开收起，测速结果统一按延迟毫秒升序排列；选集点击即播。
+- 播放器线路菜单不显示序号，片头片尾面板贴右下控制区弹出并支持外部点击、关闭按钮和 Esc；音量限制在 0–100%，滚轮与上下键调整。
+- 数据源不再手工绑定：首页可挑一个源站展示内容，点击条目或续播时若原站缺剧会自动换到可用线路。
+- 清空历史等批量操作需要二次确认，单条删除提供撤销；通知区区分成功、警告与错误。
+
+构建与打包（需要 JDK 17）：
+
+```powershell
+.\gradlew.bat :desktop:desktopTest        # 桌面单测
+.\gradlew.bat :desktop:run                # 直接运行
+.\gradlew.bat :desktop:packageMsi         # 生成 MSI 安装包
+```
+
+MSI 输出在 `desktop/build/compose/binaries/main/msi/`，安装包版本由 `desktop/build.gradle.kts` 中的 `desktopVersion` 统一提供，侧栏与设置页“关于”读取同一份生成值。
+
 ## 界面预览
 
 ![TVBox 首页界面预览](docs/screenshots/home-preview.png)
@@ -248,10 +272,20 @@ git push origin main
 
 ```text
 app/src/main/java/com/tvbox/app
-├── data        # API、仓库、历史记录、OTA、直播数据
-├── domain      # 领域模型与解析规则
+├── data        # Android 端存储适配与平台能力
+├── domain      # Android 端专属领域逻辑
 ├── ui          # Compose 页面、播放器、直播页
 └── MainActivity.kt
+
+core/src/main/kotlin/com/tvbox/app
+├── data        # 影视/直播接口、仓库、历史、测速、OTA 清单
+└── domain      # 领域模型、聚合、播放策略（电视与桌面共享）
+
+desktop/src/desktopMain/kotlin/com/tvbox/desktop
+├── data        # 桌面存储、图片加载、路径
+├── state       # 页面状态与动作
+├── ui          # 壳层、首页/片库/搜索/追剧/历史/直播/设置/详情/播放
+└── Main.kt     # 窗口创建、DPI、最大化与全屏
 ```
 
 ## 技术栈

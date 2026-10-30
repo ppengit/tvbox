@@ -30,14 +30,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collect
+import com.tvbox.app.data.AppStorageNames
 import com.tvbox.app.data.DefaultAppUpdateRepository
 import com.tvbox.app.data.DefaultDoubanHotRepository
 import com.tvbox.app.data.DefaultMovieRepository
-import com.tvbox.app.data.SharedAppSettingsRepository
-import com.tvbox.app.data.SharedDoubanHotCache
-import com.tvbox.app.data.SharedHistoryRepository
-import com.tvbox.app.data.SharedPlaybackHealthRepository
-import com.tvbox.app.data.SharedPlatformLiveFavoritesRepository
+import com.tvbox.app.data.PersistentAppSettingsRepository
+import com.tvbox.app.data.PersistentDoubanHotCache
+import com.tvbox.app.data.PersistentHistoryRepository
+import com.tvbox.app.data.PersistentPlaybackHealthRepository
+import com.tvbox.app.data.PersistentPlatformLiveFavoritesRepository
+import com.tvbox.app.data.PreferenceKeyValueStore
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tvbox.app.ui.TvBoxApp
 import com.tvbox.app.ui.TvBoxViewModel
@@ -419,16 +421,27 @@ private class TvBoxViewModelFactory(
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        val context = activity.applicationContext
         return TvBoxViewModel(
             repository = DefaultMovieRepository(),
             doubanHotRepository = DefaultDoubanHotRepository(
-                cache = SharedDoubanHotCache(activity.applicationContext),
+                cache = PersistentDoubanHotCache(
+                    PreferenceKeyValueStore(context, AppStorageNames.DOUBAN_HOT_CACHE),
+                ),
             ),
-            appUpdateRepository = DefaultAppUpdateRepository(activity.applicationContext),
-            appSettingsRepository = SharedAppSettingsRepository(activity.applicationContext),
-            playbackHealthRepository = SharedPlaybackHealthRepository(activity.applicationContext),
-            historyRepository = SharedHistoryRepository(activity.applicationContext),
-            platformLiveFavoritesRepository = SharedPlatformLiveFavoritesRepository(activity.applicationContext),
+            appUpdateRepository = DefaultAppUpdateRepository(context),
+            appSettingsRepository = PersistentAppSettingsRepository(
+                PreferenceKeyValueStore(context, AppStorageNames.SETTINGS),
+            ),
+            playbackHealthRepository = PersistentPlaybackHealthRepository(
+                PreferenceKeyValueStore(context, AppStorageNames.PLAYBACK_HEALTH),
+            ),
+            historyRepository = PersistentHistoryRepository(
+                PreferenceKeyValueStore(context, AppStorageNames.HISTORY),
+            ),
+            platformLiveFavoritesRepository = PersistentPlatformLiveFavoritesRepository(
+                PreferenceKeyValueStore(context, AppStorageNames.PLATFORM_LIVE_FAVORITES),
+            ),
         ) as T
     }
 }

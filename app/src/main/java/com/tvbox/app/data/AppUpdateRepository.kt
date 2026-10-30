@@ -137,7 +137,7 @@ class DefaultAppUpdateRepository(
                     android.util.Log.w("TVBoxUpdate", "System downloader unavailable; using app download", error)
                     0L
                 }
-                PendingSystemDownload(id, target.absolutePath, UpdateManifestDto(
+                PendingSystemDownload(id, target.absolutePath, AppUpdateManifestDto(
                     update.versionCode, update.versionName, update.apkUrl, update.apkSha256,
                     update.apkSize, update.force, update.changelog,
                 ), appDownloader = id == 0L).also(::saveTask)
@@ -253,35 +253,6 @@ class DefaultAppUpdateRepository(
 
 }
 
-internal fun parseAppUpdateManifest(
-    raw: String,
-    currentVersionCode: Long,
-    json: Json = Json { ignoreUnknownKeys = true },
-): AppUpdate? {
-    val dto = json.decodeFromString<UpdateManifestDto>(raw.trimStart('\uFEFF'))
-    if (dto.versionCode <= currentVersionCode) return null
-    return AppUpdate(
-        versionCode = dto.versionCode,
-        versionName = dto.versionName.trim(),
-        apkUrl = dto.apkUrl.trim(),
-        apkSha256 = dto.apkSha256.trim(),
-        apkSize = dto.apkSize.coerceAtLeast(0L),
-        force = dto.force,
-        changelog = dto.changelog.map { it.trim() }.filter { it.isNotBlank() },
-    )
-}
-
-@Serializable
-private data class UpdateManifestDto(
-    @SerialName("versionCode") val versionCode: Long,
-    @SerialName("versionName") val versionName: String,
-    @SerialName("apkUrl") val apkUrl: String,
-    @SerialName("apkSha256") val apkSha256: String = "",
-    @SerialName("apkSize") val apkSize: Long = 0,
-    @SerialName("force") val force: Boolean = false,
-    @SerialName("changelog") val changelog: List<String> = emptyList(),
-)
-
 private const val UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/ZxxXinI/tvbox/main/update.json"
 private const val USER_AGENT = "TVBox-Android"
 
@@ -289,13 +260,13 @@ private const val USER_AGENT = "TVBox-Android"
 private data class PendingSystemDownload(
     val id: Long,
     val filePath: String,
-    val manifest: UpdateManifestDto,
+    val manifest: AppUpdateManifestDto,
     val installPrompted: Boolean = false,
     val awaitingInstallPermission: Boolean = false,
     val appDownloader: Boolean = false,
     val manualInstallOnly: Boolean = false,
 )
 
-private fun UpdateManifestDto.toDomain() = AppUpdate(
+private fun AppUpdateManifestDto.toDomain() = AppUpdate(
     versionCode, versionName, apkUrl, apkSha256, apkSize, force, changelog,
 )

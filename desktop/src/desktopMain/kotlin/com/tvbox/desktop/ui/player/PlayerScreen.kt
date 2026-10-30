@@ -175,6 +175,12 @@ fun PlayerScreen(
     val inIntro = !playerState.isLive && introEndMs > 0L && positionMs < introEndMs && introEndMs < 30 * 60_000L
     val inOutro = !playerState.isLive && outroStartMs > 0L && durationMs > outroStartMs + 5_000L &&
         positionMs >= outroStartMs
+    // 续播时 mpv 会把媒体定位到上次位置：Ready 之后到真正出画面前还会黑屏一段时间，
+    // 这段时间必须继续显示加载层，否则用户看到的就是「黑屏且没有任何反应」。
+    val resumeSeeking = readySinceOpen && !playerState.isLive && pendingStart > 0L && positionMs <= 0L
+    val showOpeningOverlay = errorMessage == null && (!readySinceOpen || resumeSeeking || playState.isBuffering)
+    val latestReadySinceOpen by rememberUpdatedState(readySinceOpen)
+    val latestPositionMs by rememberUpdatedState(positionMs)
 
     fun markInteraction() {
         lastInteraction = System.currentTimeMillis()
@@ -315,8 +321,10 @@ fun PlayerScreen(
     }
 
     // 缓冲看护：起播或卡缓冲超过阈值视为线路不可用，按设置决定是否自动换源。
-    LaunchedEffect(playState.isBuffering, playState.mediaStatus) {
-        val buffering = playState.isBuffering || playState.mediaStatus == MediaStatus.Opening
+    LaunchedEffect(playState.isBuffering, playState.mediaStatus, readySinceOpen, positionMs) {
+        // 续播定位也算「还没出画面」：Ready 之后停在 0 秒说明 mpv 还在 seek。
+        val resumeSeeking = readySinceOpen && pendingStart > 0L && positionMs <= 0L
+        val buffering = playState.isBuffering || playState.mediaStatus == MediaStatus.Opening || resumeSeeking
         bufferingStartedAt = when {
             !buffering -> 0L
             bufferingStartedAt == 0L -> System.currentTimeMillis()
@@ -331,9 +339,15 @@ fun PlayerScreen(
             if (playerState.isLive || timeoutSeconds <= 0 || startedAt == 0L) continue
             if (System.currentTimeMillis() - startedAt < timeoutSeconds * 1000L) continue
             bufferingStartedAt = 0L
+            val resumeStalled = latestReadySinceOpen && pendingStart > 0L && latestPositionMs <= 0L
+            val reason = if (resumeStalled) {
+                "续播定位超过 $timeoutSeconds 秒"
+            } else {
+                "缓冲超过 $timeoutSeconds 秒"
+            }
             val switched = state.effectiveAutoSwitch(playerState.movie) && options.size > 1 &&
-                state.handlePlaybackFailure("缓冲超过 $timeoutSeconds 秒")
-            errorMessage = if (switched) null else "缓冲超过 $timeoutSeconds 秒，线路可能不可用"
+                state.handlePlaybackFailure(reason)
+            errorMessage = if (switched) null else "$reason，线路可能不可用"
         }
     }
 
@@ -387,11 +401,14 @@ fun PlayerScreen(
     }
 
     // 起播计时：用于在加载层里显示等待秒数，超过缓冲阈值时明确提示会自动换源。
+    // 续播定位期间继续计时，避免 Ready 之后 seek 很久却一直停在「0 秒」。
     LaunchedEffect(playerState.currentUrl) {
         openingSeconds = 0
-        while (!readySinceOpen) {
+        while (!latestReadySinceOpen || (pendingStart > 0L && latestPositionMs <= 0L)) {
             delay(1_000)
-            if (!readySinceOpen) openingSeconds++
+            if (!latestReadySinceOpen || (pendingStart > 0L && latestPositionMs <= 0L)) {
+                openingSeconds++
+            }
         }
     }
 
@@ -511,16 +528,21 @@ fun PlayerScreen(
     ) {
         MediampPlayerSurface(player, Modifier.fillMaxSize())
 
-        if (playState.isLoadingOrBuffering() && errorMessage == null) {
-            Box(Modifier.fillMaxSize().background(Color(0x66000000)), contentAlignment = Alignment.Center) {
+        if (showOpeningOverlay) {
+            Box(
+                Modifier.fillMaxSize().background(
+                    if (!readySinceOpen || resumeSeeking) Color(0xCC050807) else Color(0x66000000),
+                ),
+                contentAlignment = Alignment.Center,
+            ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     BufferedSpinner(44.dp)
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        text = if (!readySinceOpen) {
-                            "正在打开「${playerState.sourceName.ifBlank { "当前线路" }}」"
-                        } else {
-                            "缓冲中…"
+                        text = when {
+                            !readySinceOpen -> "正在打开「${playerState.sourceName.ifBlank { "当前线路" }}」"
+                            resumeSeeking -> "正在跳转到上次位置…"
+                            else -> "缓冲中…"
                         },
                         style = MaterialTheme.typography.titleMedium,
                         color = Color.White,
@@ -531,7 +553,13 @@ fun PlayerScreen(
                     } else {
                         listOfNotNull(
                             playerState.episodeTitle.takeIf { it.isNotBlank() },
-                            "第 ${playerState.episodeIndex + 1} 集",
+                            if (!readySinceOpen) {
+                                "第 ${playerState.episodeIndex + 1} 集"
+                            } else {
+                                null
+                            },
+                            pendingStart.takeIf { resumeSeeking && it > 0L }
+                                ?.let { "从 ${formatSkipTime(it)} 继续" },
                         ).distinct().joinToString(" · ")
                     }
                     if (loadingSubtitle.isNotBlank()) {
@@ -542,13 +570,14 @@ fun PlayerScreen(
                             color = Color(0xB3FFFFFF),
                         )
                     }
-                    if (!readySinceOpen && openingSeconds >= 1) {
+                    if ((!readySinceOpen || resumeSeeking) && openingSeconds >= 1) {
                         Spacer(Modifier.height(10.dp))
                         Text(
-                            text = if (openingSeconds >= 4) {
-                                "已等待 ${openingSeconds} 秒，超过 ${settings.bufferingTimeoutSeconds} 秒无画面会自动切换线路"
-                            } else {
-                                "已等待 ${openingSeconds} 秒，线路较慢时会自动切换"
+                            text = when {
+                                resumeSeeking -> "已等待 ${openingSeconds} 秒，正在从上次进度继续；过慢会自动切换线路"
+                                openingSeconds >= 4 ->
+                                    "已等待 ${openingSeconds} 秒，超过 ${settings.bufferingTimeoutSeconds} 秒无画面会自动切换线路"
+                                else -> "已等待 ${openingSeconds} 秒，线路较慢时会自动切换"
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = Color(0x99FFFFFF),
@@ -1429,6 +1458,3 @@ private fun formatTime(ms: Long): String {
 
 private fun trimSpeed(speed: Float): String =
     if (speed == speed.toInt().toFloat()) speed.toInt().toString() else speed.toString()
-
-private fun org.openani.mediamp.PlayerState.isLoadingOrBuffering(): Boolean =
-    mediaStatus == MediaStatus.Opening || isBuffering

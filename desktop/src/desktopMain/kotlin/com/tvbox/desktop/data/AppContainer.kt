@@ -38,6 +38,7 @@ class AppContainer {
     private val policyStore = FileKeyValueStore(DesktopPaths.storeFile("movie_playback_policies"))
     private val skipStore = FileKeyValueStore(DesktopPaths.storeFile("skip_marks"))
     private val searchHistoryStore = FileKeyValueStore(DesktopPaths.storeFile("search_history"))
+    private val speedCacheStore = FileKeyValueStore(DesktopPaths.storeFile("speed_cache"))
 
     init {
         // 代理必须在任何网络客户端发出第一个请求之前配置好。
@@ -72,6 +73,8 @@ class AppContainer {
     val platformLiveRepository: PlatformLiveRepository = DefaultPlatformLiveRepository()
 
     val speedTester: LineSpeedTester = LineSpeedTester()
+
+    val speedCacheRepository: SpeedCacheRepository = SpeedCacheRepository(speedCacheStore)
 
     val streamPrefetcher: StreamPrefetcher = StreamPrefetcher()
 

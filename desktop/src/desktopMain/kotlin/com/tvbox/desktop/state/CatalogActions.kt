@@ -7,6 +7,7 @@ import com.tvbox.app.domain.WatchHistoryItem
 import com.tvbox.app.domain.findBestTitleMatchIndex
 import com.tvbox.app.domain.historyKey
 import com.tvbox.app.domain.resolveHistoryEpisodePosition
+import com.tvbox.desktop.data.movieSpeedCacheKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -263,11 +264,17 @@ fun DesktopAppState.openDetail(movie: Movie, apiLineId: String = movie.apiLineId
     sourceSpeedJob?.cancel()
     sourceSpeedJob = null
     detailRequestId++
+    // 上次测过这部就先把结果回填，用户不用为了排序再等一轮测速。
+    val cachedSpeeds = runCatching {
+        speedCacheRepository.loadSourceSpeeds(movieSpeedCacheKey(apiLineId, movie.id))
+    }.getOrNull()
     setDetail(
         DetailState(
             movie = movie,
             loading = true,
             sourceIndex = movie.preferredSourceIndex(),
+            sourceSpeeds = cachedSpeeds?.toResultsByIndex(movie.playSources).orEmpty(),
+            sourceSpeedsMeasuredAtMs = cachedSpeeds?.measuredAtMs ?: 0L,
             policy = runCatching { playbackPolicyRepository.find(apiLineId, movie.id) }.getOrNull(),
         ),
     )
@@ -285,6 +292,9 @@ fun DesktopAppState.openDetail(movieId: Int, apiLineId: String = homeApiLineId) 
 
 private fun DesktopAppState.startDetailLoad(movieId: Int, apiLineId: String, initial: Movie?) {
     val requestId = detailRequestId
+    val cachedSpeeds = runCatching {
+        speedCacheRepository.loadSourceSpeeds(movieSpeedCacheKey(apiLineId, movieId))
+    }.getOrNull()
     detailJob = scopeRef.launch {
         var received = false
         var policyLoaded = false
@@ -314,6 +324,12 @@ private fun DesktopAppState.startDetailLoad(movieId: Int, apiLineId: String, ini
                         policyLoaded = true
                         runCatching { playbackPolicyRepository.find(apiLineId, update.movie.id) }.getOrNull()
                     }
+                    // 慢慢加载出来的播放源也要能对上缓存：索引按当前源列表重新映射。
+                    val cachedResults = if (current.sourceSpeeds.isEmpty()) {
+                        cachedSpeeds?.toResultsByIndex(update.movie.playSources).orEmpty()
+                    } else {
+                        emptyMap()
+                    }
                     current.copy(
                         movie = update.movie,
                         movieId = update.movie.id,
@@ -324,6 +340,12 @@ private fun DesktopAppState.startDetailLoad(movieId: Int, apiLineId: String, ini
                         sourceIndex = sourceIndex,
                         episodeIndex = episodeIndex,
                         policy = policy,
+                        sourceSpeeds = if (cachedResults.isNotEmpty()) cachedResults else current.sourceSpeeds,
+                        sourceSpeedsMeasuredAtMs = if (cachedResults.isNotEmpty()) {
+                            cachedSpeeds?.measuredAtMs ?: 0L
+                        } else {
+                            current.sourceSpeedsMeasuredAtMs
+                        },
                     )
                 }
                 // 这条线路最后一条播放源都没有时，别再让用户自己换线路，按片名自动找一条。
@@ -467,7 +489,7 @@ fun DesktopAppState.resumeHistory(item: WatchHistoryItem) {
                 sourceSpeedJob?.cancel()
                 sourceSpeedJob = null
                 detailRequestId++
-                runCatching { movieRepository.getDetail(item.apiLineId, item.movieId) }.getOrNull()
+                runCatching { movieRepository.getResumeDetail(item.apiLineId, item.movieId) }.getOrNull()
                     // 原来的线路下架了就按片名自动找一条，不再把用户赶回搜索页。
                     ?: findMovieOnAnyLine(item.movieName, preferredLineId = homeApiLineId)?.also { (match, lineId) ->
                         notify("原线路不可用，已自动切到「${match.apiLineName.ifBlank { lineId }}」")

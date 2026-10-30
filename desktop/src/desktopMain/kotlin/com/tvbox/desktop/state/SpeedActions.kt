@@ -3,6 +3,9 @@ package com.tvbox.desktop.state
 import com.tvbox.app.data.AppLog
 import com.tvbox.app.data.SpeedResult
 import com.tvbox.app.domain.Movie
+import com.tvbox.desktop.data.CachedSpeed
+import com.tvbox.desktop.data.movieSpeedCacheKey
+import com.tvbox.desktop.data.speedCacheKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -21,13 +24,19 @@ fun DesktopAppState.runLineSpeedTest() {
             val lines = movieRepository.apiLines
             AppLog.info("Speed", "开始线路测速，共 ${lines.size} 条")
             val results = container.speedTester.measureLines(lines)
+            val measuredAt = System.currentTimeMillis()
             updateSpeedTest {
                 it.copy(
                     running = false,
-                    lastRunAtMs = System.currentTimeMillis(),
+                    lastRunAtMs = measuredAt,
                     lineResults = results.associateBy { result -> result.targetId },
                 )
             }
+            // 落盘后重启也能按上次的延迟排序，不必每次开设置页重测。
+            speedCacheRepository.saveLineSpeeds(
+                speeds = results.associate { it.targetId to CachedSpeed.from(it) },
+                measuredAtMs = measuredAt,
+            )
             val fastest = results.filter { it.ok }
                 .minWithOrNull(compareBy({ it.latencyMs.coerceAtLeast(1L) }, { -it.kbps }))
             if (fastest != null) {
@@ -80,6 +89,17 @@ fun DesktopAppState.runSourceSpeedTest() {
         try {
             val results = container.speedTester.measureSources(movie.playSources)
             if (!isCurrentDetailMovie(movie, requestId)) return@launch
+            val measuredAt = System.currentTimeMillis()
+            // 结果按「线路 + 播放源名」缓存，同一部剧下次打开可直接回填排序。
+            runCatching {
+                speedCacheRepository.saveSourceSpeeds(
+                    movieKey = movieSpeedCacheKey(movie.apiLineId, movie.id),
+                    speeds = movie.playSources.mapIndexedNotNull { index, source ->
+                        results.getOrNull(index)?.let { source.speedCacheKey() to CachedSpeed.from(it) }
+                    }.toMap(),
+                    measuredAtMs = measuredAt,
+                )
+            }
             updateDetail { current ->
                 val currentMovie = current.movie
                 if (currentMovie == null ||
@@ -91,6 +111,7 @@ fun DesktopAppState.runSourceSpeedTest() {
                     current.copy(
                         speedTesting = false,
                         sourceSpeeds = results.mapIndexed { index, result -> index to result }.toMap(),
+                        sourceSpeedsMeasuredAtMs = measuredAt,
                     )
                 }
             }
@@ -115,13 +136,40 @@ fun DesktopAppState.runSourceSpeedTest() {
     }
 }
 
+/** 详情页「播放线路」标题右侧的测速状态：说明排序依据以及结果是新测的还是回填的。 */
+internal fun speedFreshnessHint(speedTesting: Boolean, measuredAtMs: Long, nowMs: Long): String {
+    if (speedTesting) return "测速中…"
+    if (measuredAtMs <= 0L) return "测速后按延迟排序"
+    val minutes = ((nowMs - measuredAtMs).coerceAtLeast(0L)) / 60_000L
+    val freshness = when {
+        minutes < 1L -> "刚刚测速"
+        minutes < 60L -> "${minutes} 分钟前测速"
+        minutes < 24L * 60L -> "${minutes / 60L} 小时前测速"
+        else -> "${minutes / (24L * 60L)} 天前测速"
+    }
+    return "$freshness · 按延迟排序"
+}
+
 /** 详情请求是否还是发起测速的那一次，且剧集没有被换掉。 */
 internal fun DesktopAppState.isCurrentDetailMovie(movie: Movie, requestId: Long): Boolean =
     detailRequestId == requestId &&
         detail.value?.movie?.let { it.apiLineId == movie.apiLineId && it.id == movie.id } == true
 
+/**
+ * 启动时回填上次的线路测速结果。只保留当前仍然存在的线路，
+ * 避免删掉的线路继续出现在「最快线路」里。
+ */
+fun DesktopAppState.loadCachedLineSpeeds() {
+    val cached = runCatching { speedCacheRepository.loadLineSpeeds() }.getOrNull() ?: return
+    val knownIds = runCatching { movieRepository.apiLines.map { it.id }.toSet() }.getOrDefault(emptySet())
+    val results = cached.toResults().filterKeys { knownIds.isEmpty() || it in knownIds }
+    if (results.isEmpty()) return
+    updateSpeedTest { it.copy(lineResults = results, lastRunAtMs = cached.measuredAtMs) }
+}
+
 fun DesktopAppState.clearLineSpeedResults() {
     updateSpeedTest { it.copy(lineResults = emptyMap(), lastRunAtMs = 0) }
+    speedCacheRepository.clearLineSpeeds()
 }
 
 /** 按设置里的间隔启动定时测速；间隔为 0 表示关闭。 */

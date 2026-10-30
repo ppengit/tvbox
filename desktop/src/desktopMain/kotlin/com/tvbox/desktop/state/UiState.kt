@@ -146,6 +146,8 @@ data class DetailState(
     val resumeHint: WatchHistoryItem? = null,
     val followed: Boolean = false,
     val sourceSpeeds: Map<Int, SpeedResult> = emptyMap(),
+    /** 当前这组播放源测速结果的时间；0 表示还没有任何结果（含缓存）。 */
+    val sourceSpeedsMeasuredAtMs: Long = 0L,
     val speedTesting: Boolean = false,
     val policy: com.tvbox.desktop.data.MoviePlaybackPolicy? = null,
 )

@@ -48,6 +48,8 @@ class DesktopAppState(
     internal val playbackPolicyRepository: com.tvbox.desktop.data.PlaybackPolicyRepository =
         container.playbackPolicyRepository
     internal val skipMarksRepository: com.tvbox.desktop.data.SkipMarksRepository = container.skipMarksRepository
+    internal val speedCacheRepository: com.tvbox.desktop.data.SpeedCacheRepository =
+        container.speedCacheRepository
     internal val playbackAgent = PlaybackAgent()
 
     internal val scopeRef: CoroutineScope get() = scope
@@ -225,6 +227,7 @@ class DesktopAppState(
         }
         loadHistory()
         loadPlaybackHealth()
+        loadCachedLineSpeeds()
         refreshLiveGroupsIfNeeded()
         loadFollows()
         loadSkipMarks()

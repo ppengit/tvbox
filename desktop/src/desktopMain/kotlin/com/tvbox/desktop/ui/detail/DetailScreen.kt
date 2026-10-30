@@ -460,7 +460,12 @@ private fun PlaySettingsCard(
             )
             Spacer(Modifier.weight(1f))
             Text(
-                text = "测速后按延迟排序",
+                // 有缓存结果时显示测速时间，让用户知道排序不是刚测出来的。
+                text = speedFreshnessHint(
+                    speedTesting = detail.speedTesting,
+                    measuredAtMs = detail.sourceSpeedsMeasuredAtMs,
+                    nowMs = System.currentTimeMillis(),
+                ),
                 style = MaterialTheme.typography.labelMedium,
                 color = AppColors.colors.textTertiary,
             )

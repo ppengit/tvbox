@@ -1,5 +1,6 @@
 package com.tvbox.desktop.data
 
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -59,10 +60,16 @@ object DesktopPaths {
      * 先写临时文件再原子替换，避免进程中途退出留下半截 JSON。
      */
     fun writeAtomically(target: Path, content: String) {
-        val temp = Files.createTempFile(target.parent, "store", ".tmp")
+        val parent = target.parent ?: Path.of(".").toAbsolutePath()
+        Files.createDirectories(parent)
+        val temp = Files.createTempFile(parent, "store", ".tmp")
         try {
             Files.writeString(temp, content)
-            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            try {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+            }
         } catch (error: Exception) {
             runCatching { Files.deleteIfExists(temp) }
             throw error

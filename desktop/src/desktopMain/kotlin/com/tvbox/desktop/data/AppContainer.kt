@@ -88,7 +88,7 @@ class AppContainer {
      * 优先读本地设置，其次读环境变量，都没有时直播页会提示去设置里填写。
      */
     var platformLiveServiceUrl: String
-        get() = desktopStore.getString(PLATFORM_LIVE_KEY)
+        get() = desktopStore.getString(PLATFORM_LIVE_KEY)?.takeIf { it.isNotBlank() }
             ?: System.getenv("TVBOX_PLATFORM_LIVE_SERVICE_URL").orEmpty()
         set(value) {
             desktopStore.edit { putString(PLATFORM_LIVE_KEY, value.trim()) }

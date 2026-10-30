@@ -201,6 +201,51 @@ class MovieRepositoryTest {
         assertEquals(listOf("primary", "backup", "extra"), updates.last().movie.playSources.map { it.lineId })
     }
 
+    @Test
+    fun unknownApiLineIsRejectedInsteadOfOpeningTheFirstLine() = runBlocking {
+        val primary = line("primary")
+        var requests = 0
+        val repository = repository(listOf(primary), mapOf(
+            primary.baseUrls.single() to fakeApi { _, _, _, _, _, _ ->
+                requests++
+                response(vod(id = 1, name = "同 id 的另一部片"))
+            },
+        ))
+
+        val failure = runCatching { repository.getMovies(apiLineId = "removed-line", page = 1) }
+        assertTrue(failure.exceptionOrNull() is IllegalArgumentException)
+        assertEquals(0, requests)
+
+        val detailFailure = runCatching { repository.getDetail(apiLineId = "removed-line", id = 1) }
+        assertTrue(detailFailure.exceptionOrNull() is IllegalArgumentException)
+        assertEquals(0, requests)
+    }
+
+    @Test
+    fun getDetailReadsFreshEpisodesInsteadOfThirtyMinuteCache() = runBlocking {
+        val primary = line("primary")
+        var episodeCount = 1
+        val repository = repository(listOf(primary), mapOf(
+            primary.baseUrls.single() to fakeApi { _, _, _, _, _, _ ->
+                response(
+                    VodDto(
+                        vodId = 1,
+                        vodName = "追剧测试",
+                        vodYear = "2026",
+                        vodPlayFrom = "m3u8",
+                        vodPlayUrl = (1..episodeCount).joinToString("#") {
+                            "第${it}集\$https://primary.test/$it.m3u8"
+                        },
+                    ),
+                )
+            },
+        ))
+
+        assertEquals(1, repository.getDetail("primary", 1)!!.playSources.single().episodes.size)
+        episodeCount = 2
+        assertEquals(2, repository.getDetail("primary", 1)!!.playSources.single().episodes.size)
+    }
+
     private fun repository(
         lines: List<ApiLine>,
         apiByBaseUrl: Map<String, MacCmsApi>,

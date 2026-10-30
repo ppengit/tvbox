@@ -3,6 +3,7 @@ package com.tvbox.app.data
 import com.tvbox.app.domain.WatchHistoryItem
 import com.tvbox.app.domain.historyKey
 import java.io.IOException
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.*
@@ -66,6 +67,41 @@ class HistoryRepositoryTest {
             }
         }
         assertTrue(decodeHistoryRecords("[]").isEmpty())
+    }
+
+    @Test fun restoreKeepsUndoneSnapshotEvenWhenHistoryIsFull() {
+        val restored = history().copy(movieId = 99, updatedAtEpochMs = 1)
+        val full = (1..3).map { history().copy(movieId = it, updatedAtEpochMs = 100L + it) }
+
+        val result = restoreHistoryRecord(full, restored, limit = 3)
+
+        assertEquals(3, result.size)
+        assertTrue(result.any { it.movieId == 99 })
+        assertTrue(result.none { it.movieId == 1 })
+        assertTrue(restoreHistoryRecord(full, restored, limit = 0).isEmpty())
+    }
+
+    @Test fun restoreReplacesStaleDuplicateAndKeepsOrder() {
+        val stale = history().copy(positionMs = 1, updatedAtEpochMs = 5)
+        val restored = stale.copy(positionMs = 50_000)
+        val other = history().copy(movieId = 2, updatedAtEpochMs = 10)
+
+        val result = restoreHistoryRecord(listOf(stale, other), restored, limit = 10)
+
+        assertEquals(listOf(2, 1), result.map { it.movieId })
+        assertEquals(50_000L, result.single { it.movieId == 1 }.positionMs)
+    }
+
+    @Test fun historyReadIsCappedAtOneHundredNewestRecords() = runBlocking {
+        val items = (1..120).map { id ->
+            history().copy(movieId = id, updatedAtEpochMs = id.toLong())
+        }
+        val store = InMemoryKeyValueStore(mapOf("items" to HISTORY_JSON.encodeToString(items)))
+        val loaded = PersistentHistoryRepository(store).getHistory()
+
+        assertEquals(100, loaded.size)
+        assertEquals(120, loaded.first().movieId)
+        assertEquals(21, loaded.last().movieId)
     }
 
     @Test fun removeInvalidatesQueuedOldSnapshotButAllowsNewPlaybackAndOtherApi() {

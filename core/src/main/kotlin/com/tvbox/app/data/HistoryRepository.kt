@@ -78,6 +78,7 @@ class PersistentHistoryRepository(private val store: KeyValueStore) : HistoryRep
                 )
             }
             .sortedByDescending { it.updatedAtEpochMs }
+            .take(MAX_HISTORY_ITEMS)
     }
 
     private companion object {
@@ -126,9 +127,16 @@ internal fun restoreHistoryRecord(
     current: List<WatchHistoryItem>,
     item: WatchHistoryItem,
     limit: Int,
-): List<WatchHistoryItem> = (listOf(item) + current.filterNot { it.apiLineId == item.apiLineId && it.movieId == item.movieId })
-    .sortedByDescending { it.updatedAtEpochMs }
-    .take(limit.coerceAtLeast(0))
+): List<WatchHistoryItem> {
+    if (limit <= 0) return emptyList()
+    // 恢复的条目必须保留：只按时间排序再截断时，旧快照会被最新记录挤出列表，
+    // 用户点「撤销」看起来什么都没发生。这里改为挤掉其他记录里最旧的一条。
+    val rest = current
+        .filterNot { it.apiLineId == item.apiLineId && it.movieId == item.movieId }
+        .sortedByDescending { it.updatedAtEpochMs }
+        .take((limit - 1).coerceAtLeast(0))
+    return (listOf(item) + rest).sortedByDescending { it.updatedAtEpochMs }
+}
 
 /** Invalidates only snapshots captured before an explicit remove/clear action. */
 class HistoryWriteGuard {

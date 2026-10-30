@@ -10,12 +10,16 @@ class SearchHistoryRepository(private val store: KeyValueStore) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    @Synchronized
     fun load(): List<String> {
         val raw = store.getString(KEY, null).orEmpty()
         if (raw.isBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
+        val decoded = runCatching { json.decodeFromString<List<String>>(raw) }.getOrNull()
+        if (decoded == null) store.backupCorruptValue(KEY, raw)
+        return decoded ?: emptyList()
     }
 
+    @Synchronized
     fun record(keyword: String): List<String> {
         val trimmed = keyword.trim()
         if (trimmed.isBlank()) return load()
@@ -25,6 +29,7 @@ class SearchHistoryRepository(private val store: KeyValueStore) {
         return next
     }
 
+    @Synchronized
     fun clear() {
         store.edit { putString(KEY, "[]") }
     }

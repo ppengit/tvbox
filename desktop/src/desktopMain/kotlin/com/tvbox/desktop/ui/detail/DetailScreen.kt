@@ -5,8 +5,10 @@ import androidx.compose.foundation.TooltipPlacement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,9 +29,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -38,7 +43,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
@@ -71,7 +88,23 @@ fun DetailScreen(
     detail: DetailState,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier.fillMaxSize()) {
+    // Esc 与「返回」等价：详情是叠加在页面之上的一层，键盘用户不该只能靠鼠标回退。
+    val backFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { backFocus.requestFocus() } }
+    Column(
+        modifier
+            .fillMaxSize()
+            .focusRequester(backFocus)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    state.setDetail(null)
+                    true
+                } else {
+                    false
+                }
+            },
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -80,7 +113,11 @@ fun DetailScreen(
             Spacer(Modifier.weight(1f))
             detail.movie?.let {
                 Text(
-                    text = "来源 ${detail.completedSources}/${detail.totalSources.coerceAtLeast(detail.completedSources)} 条",
+                    text = if (detail.totalSources > 0) {
+                        "来源 ${detail.completedSources}/${detail.totalSources.coerceAtLeast(detail.completedSources)} 条"
+                    } else {
+                        "正在统计来源…"
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = AppColors.colors.textTertiary,
                 )
@@ -403,7 +440,9 @@ private fun PlaySettingsCard(
             }
         }
     }
-    val settings = state.settings.value.settings
+    // 用 collectAsState 订阅设置，否则「跟随全局 · 开/关」会停留在进入页面时的旧值。
+    val settings by state.settings.collectAsState()
+    val appSettings = settings.settings
 
     DetailCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -475,13 +514,13 @@ private fun PlaySettingsCard(
                 PolicyRow(
                     label = "自动切源",
                     value = detail.policy?.autoSwitch,
-                    globalValue = settings.playbackAgentAutoSwitchEnabled,
+                    globalValue = appSettings.playbackAgentAutoSwitchEnabled,
                     onSelect = { state.setMoviePolicy(it, detail.policy?.preferFastest) },
                 )
                 PolicyRow(
                     label = "优先最快线路",
                     value = detail.policy?.preferFastest,
-                    globalValue = settings.preferFastestLine,
+                    globalValue = appSettings.preferFastestLine,
                     onSelect = { state.setMoviePolicy(detail.policy?.autoSwitch, it) },
                 )
             }
@@ -528,6 +567,7 @@ private fun EpisodesCard(
     matrix: EpisodeMatrix,
 ) {
     val availability = matrix.availability(detail.sourceIndex)
+    var pendingEpisode by remember(movie.apiLineId, movie.id) { mutableStateOf<Int?>(null) }
     DetailCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -537,14 +577,28 @@ private fun EpisodesCard(
                 color = AppColors.colors.textPrimary,
             )
             Spacer(Modifier.width(10.dp))
-            Text(
-                text = "当前 ${matrix.episodes.getOrNull(detail.episodeIndex)?.title.orEmpty()}",
-                style = MaterialTheme.typography.labelMedium,
-                color = AppColors.colors.accent,
-            )
+            if (pendingEpisode != null) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = AppColors.colors.accent,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "正在打开 ${matrix.episodes.getOrNull(pendingEpisode!!)?.title.orEmpty()}…",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AppColors.colors.accent,
+                )
+            } else {
+                Text(
+                    text = "当前 ${matrix.episodes.getOrNull(detail.episodeIndex)?.title.orEmpty()}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AppColors.colors.accent,
+                )
+            }
             Spacer(Modifier.weight(1f))
             Text(
-                text = "点击任意一集即可播放，灰底表示当前线路缺这一集",
+                text = "点击任意一集即可播放；灰底表示当前线路缺这一集，点击会自动换线",
                 style = MaterialTheme.typography.labelMedium,
                 color = AppColors.colors.textTertiary,
             )
@@ -569,8 +623,14 @@ private fun EpisodesCard(
                     playableHere = playableHere,
                     playableSomewhere = playableSomewhere,
                     reason = reason,
+                    loading = pendingEpisode == index,
+                    enabled = pendingEpisode == null,
                     onClick = {
+                        if (pendingEpisode != null) return@EpisodeChip
+                        pendingEpisode = index
                         state.playDetailEpisode(detail.sourceIndex, index, 0L)
+                        // 没有成功进入播放页（例如所有线路缺集）时立刻恢复，避免一直转圈。
+                        if (state.player.value == null) pendingEpisode = null
                     },
                 )
             }
@@ -606,6 +666,7 @@ private fun SourceChip(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     Row(
         modifier = Modifier
             .height(34.dp)
@@ -619,11 +680,19 @@ private fun SourceChip(
             )
             .border(
                 1.dp,
-                if (selected) AppColors.colors.accent.copy(alpha = 0.55f) else AppColors.colors.border,
+                when {
+                    focused -> AppColors.colors.accent
+                    selected -> AppColors.colors.accent.copy(alpha = 0.55f)
+                    else -> AppColors.colors.border
+                },
                 RoundedCornerShape(8.dp),
             )
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .semantics {
+                this.selected = selected
+                role = Role.RadioButton
+            }
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -661,6 +730,7 @@ private fun SourceChip(
 private fun PolicyOption(text: String, selected: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     Box(
         modifier = Modifier
             .height(26.dp)
@@ -674,11 +744,19 @@ private fun PolicyOption(text: String, selected: Boolean, onClick: () -> Unit) {
             )
             .border(
                 1.dp,
-                if (selected) AppColors.colors.accent.copy(alpha = 0.55f) else AppColors.colors.border,
+                when {
+                    focused -> AppColors.colors.accent
+                    selected -> AppColors.colors.accent.copy(alpha = 0.55f)
+                    else -> AppColors.colors.border
+                },
                 RoundedCornerShape(6.dp),
             )
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .semantics {
+                this.selected = selected
+                role = Role.RadioButton
+            }
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -698,10 +776,13 @@ private fun EpisodeChip(
     playableHere: Boolean,
     playableSomewhere: Boolean,
     reason: String?,
+    loading: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     val background = when {
         selected -> AppColors.colors.accent
         !playableSomewhere -> AppColors.colors.surface
@@ -710,6 +791,7 @@ private fun EpisodeChip(
         else -> AppColors.colors.surfaceRaised
     }
     val borderColor = when {
+        focused -> AppColors.colors.accent
         selected -> AppColors.colors.accent
         hovered -> AppColors.colors.borderStrong
         else -> AppColors.colors.border
@@ -729,23 +811,38 @@ private fun EpisodeChip(
                 .clip(RoundedCornerShape(7.dp))
                 .background(background)
                 .border(1.dp, borderColor, RoundedCornerShape(7.dp))
-                .hoverable(interaction, enabled = playableSomewhere)
+                .hoverable(interaction, enabled = playableSomewhere && enabled)
                 .clickable(
-                    enabled = playableSomewhere,
+                    enabled = playableSomewhere && enabled,
                     interactionSource = interaction,
                     indication = null,
                     onClick = onClick,
-                ),
+                )
+                .semantics {
+                    this.selected = selected
+                    role = Role.RadioButton
+                    if (!playableSomewhere || !enabled) disabled()
+                },
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = textColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                        color = textColor,
+                    )
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 

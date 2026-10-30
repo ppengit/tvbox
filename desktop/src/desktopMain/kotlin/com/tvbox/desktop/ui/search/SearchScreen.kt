@@ -3,6 +3,8 @@ package com.tvbox.desktop.ui.search
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -92,7 +95,7 @@ fun SearchScreen(
                     focusRequester = focusRequester,
                     onValueChange = state::onSearchQueryChanged,
                     onClear = { state.onSearchQueryChanged("") },
-                    onSearch = { state.search() },
+                    onSearch = { if (search.query.isNotBlank()) state.search() },
                 )
                 Spacer(Modifier.height(12.dp))
                 if (searchHistory.isNotEmpty() && !search.searched) {
@@ -123,7 +126,7 @@ fun SearchScreen(
                             modifier = Modifier
                                 .padding(top = 6.dp)
                                 .clip(RoundedCornerShape(4.dp))
-                                .clickable { state.clearSearchHistory() }
+                                .clickable(role = Role.Button) { state.clearSearchHistory() }
                                 .padding(horizontal = 4.dp, vertical = 2.dp),
                         )
                     }
@@ -222,7 +225,7 @@ private fun SearchResultToolbar(search: SearchState, onRetry: () -> Unit) {
                     partialFailure -> "部分数据源搜索失败，已保留可用结果"
                     search.loading && total > 0 -> "正在搜索数据源 ${search.completedSources} / $total"
                     search.loading -> "正在连接数据源…"
-                    finished -> "已完成 $total 条数据源"
+                    finished -> "已完成 $total 个数据源"
                     search.error != null -> search.error
                     else -> "搜索已完成"
                 },
@@ -241,7 +244,7 @@ private fun SearchResultToolbar(search: SearchState, onRetry: () -> Unit) {
                 text = "重试",
                 style = MaterialTheme.typography.labelMedium,
                 color = AppColors.colors.accent,
-                modifier = Modifier.clickable(onClick = onRetry).padding(8.dp),
+                modifier = Modifier.clickable(role = Role.Button, onClick = onRetry).padding(8.dp),
             )
         }
     }
@@ -256,13 +259,19 @@ private fun SearchField(
     onClear: () -> Unit,
     onSearch: () -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(AppColors.colors.surface)
-            .border(1.dp, AppColors.colors.border, RoundedCornerShape(10.dp))
+            .border(
+                1.dp,
+                if (focused) AppColors.colors.accent.copy(alpha = 0.65f) else AppColors.colors.border,
+                RoundedCornerShape(10.dp),
+            )
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -275,6 +284,7 @@ private fun SearchField(
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = AppColors.colors.textPrimary),
                 cursorBrush = SolidColor(AppColors.colors.accent),
+                interactionSource = interaction,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { onSearch() }),
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
@@ -294,7 +304,7 @@ private fun SearchField(
                 color = AppColors.colors.textSecondary,
                 modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))
-                    .clickable(onClick = onClear)
+                    .clickable(role = Role.Button, onClick = onClear)
                     .padding(horizontal = 8.dp, vertical = 6.dp),
             )
             Spacer(Modifier.width(6.dp))
@@ -316,7 +326,7 @@ private fun SearchField(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (value.isBlank()) AppColors.colors.surfaceRaised else AppColors.colors.accentSoft)
-                    .clickable(enabled = value.isNotBlank(), onClick = onSearch)
+                    .clickable(enabled = value.isNotBlank(), role = Role.Button, onClick = onSearch)
                     .padding(horizontal = 11.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

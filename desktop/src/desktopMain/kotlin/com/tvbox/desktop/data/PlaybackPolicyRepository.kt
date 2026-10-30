@@ -28,23 +28,28 @@ class PlaybackPolicyRepository(private val store: KeyValueStore) {
         explicitNulls = false
     }
 
+    @Synchronized
     fun load(): List<MoviePlaybackPolicy> {
         val raw = store.getString(KEY, null).orEmpty()
         if (raw.isBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<MoviePlaybackPolicy>>(raw) }
-            .getOrDefault(emptyList())
+        val decoded = runCatching { json.decodeFromString<List<MoviePlaybackPolicy>>(raw) }.getOrNull()
+        if (decoded == null) store.backupCorruptValue(KEY, raw)
+        return decoded ?: emptyList()
     }
 
+    @Synchronized
     fun find(apiLineId: String, movieId: Int): MoviePlaybackPolicy? =
         load().firstOrNull { it.apiLineId == apiLineId && it.movieId == movieId }
 
     /** 两个覆盖项都为 null 时直接删除，避免存储里堆无效条目。 */
+    @Synchronized
     fun save(policy: MoviePlaybackPolicy) {
         val rest = load().filterNot { it.key == policy.key }
         val next = if (policy.autoSwitch == null && policy.preferFastest == null) rest else rest + policy
         persist(next)
     }
 
+    @Synchronized
     fun remove(apiLineId: String, movieId: Int) {
         persist(load().filterNot { it.apiLineId == apiLineId && it.movieId == movieId })
     }

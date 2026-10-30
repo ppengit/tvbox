@@ -61,6 +61,12 @@ fun DesktopApp(
 
     LaunchedEffect(Unit) { state.start() }
 
+    // 全屏只属于播放页：任何方式离开播放页（返回按钮、错误页返回、播放结束退出）都要
+    // 退出全屏，否则主界面会停在无标题栏的全屏状态，用户找不到退出入口。
+    LaunchedEffect(player == null) {
+        if (player == null && isFullscreen) onToggleFullscreen()
+    }
+
     DesktopTheme {
         Box(Modifier.fillMaxSize().background(AppColors.colors.background)) {
             if (player != null) {

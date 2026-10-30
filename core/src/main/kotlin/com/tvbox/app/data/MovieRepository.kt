@@ -70,6 +70,7 @@ class DefaultMovieRepository(
     private val apiFactory: (String) -> MacCmsApi = MacCmsNetwork::api,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) : MovieRepository {
+    @Volatile
     private var customApiLines: List<ApiLine> = emptyList()
     private val categoriesCache = TimedLruCache<List<Category>>(maxEntries = 24)
     private val moviesCache = TimedLruCache<PagedMovies>(maxEntries = 80)
@@ -176,8 +177,12 @@ class DefaultMovieRepository(
         )
     }
 
-    override suspend fun getDetail(apiLineId: String, id: Int): Movie? {
-        return getDetailProgressively(apiLineId = apiLineId, id = id).lastOrNull()?.movie
+    override suspend fun getDetail(apiLineId: String, id: Int): Movie? = withContext(Dispatchers.IO) {
+        // 追剧巡检和续播依赖最新集数，不能吃 30 分钟的详情缓存；渐进加载仍走缓存，
+        // 避免详情页每次打开都重新请求主线路。
+        detailFlow(apiLineId = apiLineId, id = id, freshPrimary = true)
+            .lastOrNull()
+            ?.movie
     }
 
     override suspend fun getResumeDetail(apiLineId: String, id: Int): Movie? = withContext(Dispatchers.IO) {
@@ -239,9 +244,16 @@ class DefaultMovieRepository(
         }
     }
 
-    override fun getDetailProgressively(apiLineId: String, id: Int): Flow<MovieDetailUpdate> = channelFlow {
+    override fun getDetailProgressively(apiLineId: String, id: Int): Flow<MovieDetailUpdate> =
+        detailFlow(apiLineId = apiLineId, id = id, freshPrimary = false)
+
+    private fun detailFlow(
+        apiLineId: String,
+        id: Int,
+        freshPrimary: Boolean,
+    ): Flow<MovieDetailUpdate> = channelFlow {
         val primary = withContext(Dispatchers.IO) {
-            loadPrimaryDetail(apiLineId = apiLineId, id = id)
+            loadPrimaryDetail(apiLineId = apiLineId, id = id, useCache = !freshPrimary)
         } ?: return@channelFlow
         val lines = prioritizedLines(apiLineId)
         val primarySource = primary.toLinePlaySource()
@@ -312,7 +324,9 @@ class DefaultMovieRepository(
     }
 
     private fun requireLine(apiLineId: String): ApiLine {
-        return apiLines.firstOrNull { it.id == apiLineId } ?: apiLines.first()
+        // 不能回退到第一条线路：影片 id 是线路内的编号，静默换线路会打开另一部片。
+        return apiLines.firstOrNull { it.id == apiLineId }
+            ?: throw IllegalArgumentException("影视接口不存在：$apiLineId")
     }
 
     private suspend fun <T> withFallback(
@@ -334,6 +348,8 @@ class DefaultMovieRepository(
 
     private suspend fun findSameMovie(line: ApiLine, movieName: String): Movie? {
         val normalizedName = normalizeTitle(movieName)
+        // 片名只有标点/空白时 normalize 后为空，contains("") 会命中任意候选。
+        if (normalizedName.isBlank()) return null
         val candidates = withFallback(line) { api ->
             api.getVod(action = "videolist", page = 1, keyword = movieName)
                 .list
@@ -403,19 +419,28 @@ class DefaultMovieRepository(
         return result
     }
 
-    private suspend fun loadPrimaryDetail(apiLineId: String, id: Int): Movie? {
+    private suspend fun loadPrimaryDetail(
+        apiLineId: String,
+        id: Int,
+        useCache: Boolean = true,
+    ): Movie? {
         val line = requireLine(apiLineId)
         val key = "detail:${line.id}:$id"
-        detailsCache.get(key, nowMs())?.let { return it }
-        val detail = withFallback(line) { api ->
+        if (useCache) {
+            detailsCache.get(key, nowMs())?.let { return it }
+        }
+        val detail = fetchPrimaryDetail(line, id)
+        detailsCache.put(key, detail, nowMs() + DETAIL_CACHE_TTL_MS)
+        return detail
+    }
+
+    private suspend fun fetchPrimaryDetail(line: ApiLine, id: Int): Movie? =
+        withFallback(line) { api ->
             api.getVod(action = "videolist", ids = id.toString())
                 .list
                 .firstOrNull()
                 ?.toDomainOrNull(line)
         }
-        detailsCache.put(key, detail, nowMs() + DETAIL_CACHE_TTL_MS)
-        return detail
-    }
 
     private fun prioritizedLines(primaryLineId: String): List<ApiLine> {
         val primary = requireLine(primaryLineId)

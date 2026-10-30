@@ -117,6 +117,7 @@ class PersistentDoubanHotCache(private val store: KeyValueStore) : DoubanHotCach
 class InMemoryDoubanHotCache : DoubanHotCache {
     private val entries = mutableMapOf<String, DoubanHotCacheRecord>()
 
+    @Synchronized
     override fun get(key: String, nowMs: Long): DoubanHotCacheRecord? {
         val record = entries[key] ?: return null
         return record.takeIf { it.expiresAtEpochMs > nowMs } ?: run {
@@ -125,6 +126,7 @@ class InMemoryDoubanHotCache : DoubanHotCache {
         }
     }
 
+    @Synchronized
     override fun put(key: String, record: DoubanHotCacheRecord) {
         entries[key] = record
     }
@@ -190,7 +192,9 @@ private data class DoubanHotItemDto(
             title = normalizedTitle,
             posterUrl = pic?.let { image ->
                 image.large.ifBlank { image.normal }
-            }.orEmpty().trim(),
+            }.orEmpty().trim().let { poster ->
+                if (poster.startsWith("//")) "https:$poster" else poster
+            },
             score = rating?.value?.takeIf { it > 0.0 } ?: 0.0,
             ratingCount = rating?.count?.coerceAtLeast(0) ?: 0,
             subtitle = cardSubtitle.trim(),

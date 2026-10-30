@@ -39,7 +39,12 @@ fun DesktopAppState.selectLiveGroup(group: String) {
 }
 
 fun DesktopAppState.openLiveChannel(channel: LiveChannel) {
-    val index = live.value.channels.indexOfFirst { it.number == channel.number && it.name == channel.name }
+    // 直播页只展示当前分组的频道，播放页的“上一个/下一个频道”也必须走同一份列表，
+    // 否则会跳到用户在分组里根本看不到的频道。
+    val playlist = live.value.channels
+        .filter { channel.groupName.isBlank() || it.groupName == channel.groupName }
+        .ifEmpty { live.value.channels }
+    val index = playlist.indexOfFirst { it.number == channel.number && it.name == channel.name }
     val firstLine = channel.lines.firstOrNull() ?: run {
         notify("该频道没有可用线路")
         return
@@ -47,7 +52,7 @@ fun DesktopAppState.openLiveChannel(channel: LiveChannel) {
     setPlayer(
         PlayerState(
             liveTitle = channel.name,
-            liveChannels = live.value.channels,
+            liveChannels = playlist,
             liveChannelIndex = index,
             currentUrl = firstLine.url,
         ),
@@ -83,8 +88,10 @@ fun DesktopAppState.stepLiveLine(delta: Int) {
     if (!state.isLive) return
     val channel = state.liveChannels.getOrNull(state.liveChannelIndex) ?: return
     if (channel.lines.size <= 1) return
-    val currentIndex = channel.lines.indexOfFirst { it.url == state.currentUrl }.coerceAtLeast(0)
-    val nextIndex = ((currentIndex + delta) % channel.lines.size + channel.lines.size) % channel.lines.size
+    // 找不到当前地址（例如线路列表刷新过）时按 -1 处理，从第一条开始轮换。
+    val currentIndex = channel.lines.indexOfFirst { it.url == state.currentUrl }
+    val size = channel.lines.size
+    val nextIndex = ((currentIndex + delta) % size + size) % size
     setPlayer(
         state.copy(
             currentUrl = channel.lines[nextIndex].url,
@@ -251,10 +258,14 @@ fun DesktopAppState.openPlatformLiveRoom(room: PlatformLiveRoom) {
         notify("未配置平台直播服务地址")
         return
     }
+    // 连点多个直播间时只让最后一次解析生效，避免先点的慢请求后到、把播放器顶成上一个房间。
+    val token = ++liveResolveToken
     scopeRef.launch {
         notify("正在解析「${room.title}」的直播流…")
         runCatching { platformLiveRepository.resolve(serviceUrl, room) }
             .onSuccess { stream ->
+                if (liveResolveToken != token) return@onSuccess
+                if (screen.value != DesktopScreen.PlatformLive) return@onSuccess
                 setPlayer(
                     PlayerState(
                         liveTitle = room.title,
@@ -264,7 +275,10 @@ fun DesktopAppState.openPlatformLiveRoom(room: PlatformLiveRoom) {
                     ),
                 )
             }
-            .onFailure { notify("解析失败：${it.userMessage()}") }
+            .onFailure {
+                if (liveResolveToken != token) return@onFailure
+                notify("解析失败：${it.userMessage()}")
+            }
     }
 }
 

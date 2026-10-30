@@ -77,17 +77,17 @@ fun DesktopAppState.refreshFollows(force: Boolean = true) {
             val matrix = buildEpisodeMatrix(detail.playSources)
             val latestCount = matrix.episodes.size
             val latestTitle = matrix.episodes.lastOrNull()?.title.orEmpty()
-            if (latestCount > item.lastEpisodeCount) updatedCount++
-            item.copy(
-                name = detail.name.ifBlank { item.name },
-                posterUrl = detail.posterUrl.ifBlank { item.posterUrl },
-                year = detail.year.ifBlank { item.year },
-                area = detail.area.ifBlank { item.area },
-                lastEpisodeCount = maxOf(latestCount, item.lastEpisodeCount),
-                latestEpisodeTitle = latestTitle.ifBlank { item.latestEpisodeTitle },
-                hasNewEpisodes = latestCount > item.lastEpisodeCount,
-                lastCheckedAtMs = System.currentTimeMillis(),
+            val refreshed = item.refreshedWith(
+                detailName = detail.name,
+                detailPosterUrl = detail.posterUrl,
+                detailYear = detail.year,
+                detailArea = detail.area,
+                latestCount = latestCount,
+                latestTitle = latestTitle,
+                nowMs = System.currentTimeMillis(),
             )
+            if (refreshed.hasNewEpisodes && !item.hasNewEpisodes) updatedCount++
+            refreshed
         }
         followedShowRepository.save(items)
         updateFollow {
@@ -109,6 +109,38 @@ fun DesktopAppState.refreshFollows(force: Boolean = true) {
             AppLog.info("Follow", "追剧检查完成，暂无新集")
         }
     }
+}
+
+/**
+ * 一次巡检后的追剧条目。
+ *
+ * 基线 `lastEpisodeCount` 只在用户点开这部剧时前进（见 [openFollow]）；巡检只更新
+ * `latestEpisodeCount` 并把「有新集」标记置上。旧实现每次巡检都把基线抬到最新集数，
+ * 新集标记会在用户看到之前就被下一轮巡检清掉。
+ */
+internal fun FollowedShow.refreshedWith(
+    detailName: String,
+    detailPosterUrl: String,
+    detailYear: String,
+    detailArea: String,
+    latestCount: Int,
+    latestTitle: String,
+    nowMs: Long,
+): FollowedShow {
+    val hasBaseline = lastEpisodeCount > 0
+    val newEpisodes = hasBaseline && latestCount > lastEpisodeCount
+    return copy(
+        name = detailName.ifBlank { name },
+        posterUrl = detailPosterUrl.ifBlank { posterUrl },
+        year = detailYear.ifBlank { year },
+        area = detailArea.ifBlank { area },
+        // 首次拿不到集数时只补基线，不算「有新集」。
+        lastEpisodeCount = if (hasBaseline) lastEpisodeCount else latestCount,
+        latestEpisodeCount = maxOf(latestCount, latestEpisodeCount),
+        latestEpisodeTitle = latestTitle.ifBlank { latestEpisodeTitle },
+        hasNewEpisodes = hasNewEpisodes || newEpisodes,
+        lastCheckedAtMs = nowMs,
+    )
 }
 
 fun DesktopAppState.isFollowed(apiLineId: String, movieId: Int): Boolean =
@@ -133,6 +165,7 @@ fun DesktopAppState.toggleFollow(movie: Movie, episodeIndex: Int = 0, positionMs
             area = movie.area,
             followedAtMs = System.currentTimeMillis(),
             lastEpisodeCount = episodeCount,
+            latestEpisodeCount = episodeCount,
             latestEpisodeTitle = movie.playSources.firstOrNull()?.episodes?.lastOrNull()?.title.orEmpty(),
             lastEpisodeIndex = episodeIndex,
             lastPositionMs = positionMs,
@@ -147,11 +180,23 @@ fun DesktopAppState.toggleFollow(movie: Movie, episodeIndex: Int = 0, positionMs
 }
 
 fun DesktopAppState.removeFollow(item: FollowedShow) {
-    val items = follow.value.items.filterNot { it.key == item.key }
+    val previous = follow.value.items
+    if (previous.none { it.key == item.key }) return
+    val items = previous.filterNot { it.key == item.key }
     followedShowRepository.save(items)
     updateFollow { it.copy(items = items) }
     detailFollowFlag()
-    notify("已取消追剧：${item.name}")
+    // 卡片上的移除按钮是单击生效的，给一次撤销机会，避免误删。
+    notify(
+        text = "已取消追剧：${item.name}",
+        type = NoticeType.Success,
+        action = NoticeAction(label = "撤销") {
+            followedShowRepository.save(previous)
+            updateFollow { it.copy(items = previous) }
+            detailFollowFlag()
+        },
+        durationMs = 6_000L,
+    )
 }
 
 /** 追剧条目的播放进度回写，用于「继续观看」排序。 */
@@ -170,6 +215,22 @@ fun DesktopAppState.markFollowProgress(movie: Movie, episodeIndex: Int, position
 }
 
 fun DesktopAppState.openFollow(item: FollowedShow) {
+    // 用户已经点开这部剧，「有新集」标记到此为止：把基线和已知最新集数对齐。
+    val items = follow.value.items.map { show ->
+        if (show.key == item.key && show.hasNewEpisodes) {
+            show.copy(
+                lastEpisodeCount = show.displayEpisodeCount,
+                hasNewEpisodes = false,
+            )
+        } else {
+            show
+        }
+    }
+    if (items != follow.value.items) {
+        followedShowRepository.save(items)
+        updateFollow { it.copy(items = items) }
+        detailFollowFlag()
+    }
     openDetail(movieId = item.movieId, apiLineId = item.apiLineId)
 }
 

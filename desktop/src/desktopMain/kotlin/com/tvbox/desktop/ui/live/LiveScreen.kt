@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +39,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,6 +53,7 @@ import com.tvbox.desktop.state.*
 import com.tvbox.desktop.ui.components.EmptyBox
 import com.tvbox.desktop.ui.components.ErrorBox
 import com.tvbox.desktop.ui.components.GhostButton
+import com.tvbox.desktop.ui.components.InlineError
 import com.tvbox.desktop.ui.components.LoadingBox
 import com.tvbox.desktop.ui.components.PageHeader
 import com.tvbox.desktop.ui.theme.AppColors
@@ -63,11 +69,27 @@ private fun LiveContent(state: DesktopAppState, live: LiveState, modifier: Modif
     Column(modifier.fillMaxSize()) {
         PageHeader(
             title = "电视直播",
-            subtitle = if (live.channels.isEmpty()) "央视、卫视与地方频道" else "共 ${live.channels.size} 个频道 · ${live.groups.size} 个分组",
+            subtitle = when {
+                live.channels.isEmpty() -> "央视、卫视与地方频道"
+                live.groups.isEmpty() -> "共 ${live.channels.size} 个频道"
+                else -> "共 ${live.channels.size} 个频道 · ${live.groups.size} 个分组"
+            },
         ) {
-            GhostButton(text = "刷新频道", onClick = { state.refreshLiveGroupsIfNeeded(force = true) })
+            GhostButton(
+                text = if (live.loading && live.channels.isNotEmpty()) "刷新中…" else "刷新频道",
+                enabled = !live.loading,
+                onClick = { state.refreshLiveGroupsIfNeeded(force = true) },
+            )
         }
         Spacer(Modifier.height(18.dp))
+
+        if (live.error != null && live.channels.isNotEmpty()) {
+            InlineError(
+                message = live.error,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                onRetry = { state.refreshLiveGroupsIfNeeded(force = true) },
+            )
+        }
 
         when {
             live.loading && live.channels.isEmpty() -> LoadingBox("正在加载直播源…", Modifier.fillMaxSize())
@@ -89,7 +111,12 @@ private fun LiveContent(state: DesktopAppState, live: LiveState, modifier: Modif
                 )
                 Spacer(Modifier.width(22.dp))
                 ChannelGrid(
-                    channels = live.channels.filter { it.groupName == live.selectedGroup },
+                    // 少数直播源的频道没有分组名；此时退回展示全部频道，避免列表空白。
+                    channels = if (live.groups.isEmpty()) {
+                        live.channels
+                    } else {
+                        live.channels.filter { it.groupName == live.selectedGroup }
+                    },
                     onPlay = state::openLiveChannel,
                     modifier = Modifier.weight(1f),
                 )
@@ -114,6 +141,7 @@ private fun GroupList(groups: List<String>, selected: String?, onSelect: (String
                 val isSelected = group == selected
                 val interaction = remember { MutableInteractionSource() }
                 val hovered by interaction.collectIsHoveredAsState()
+                val focused by interaction.collectIsFocusedAsState()
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -126,8 +154,14 @@ private fun GroupList(groups: List<String>, selected: String?, onSelect: (String
                                 else -> Color.Transparent
                             },
                         )
+                        .border(
+                            1.dp,
+                            if (focused) AppColors.colors.accent else Color.Transparent,
+                            RoundedCornerShape(7.dp),
+                        )
                         .hoverable(interaction)
-                        .clickable(interactionSource = interaction, indication = null) { onSelect(group) }
+                        .clickable(interactionSource = interaction, indication = null, role = Role.Tab) { onSelect(group) }
+                        .semantics { this.selected = isSelected }
                         .padding(horizontal = 10.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -181,20 +215,26 @@ private fun ChannelGrid(
 private fun ChannelCard(channel: LiveChannel, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     val hasLine = channel.lines.isNotEmpty()
     Column(
         Modifier
             .fillMaxWidth()
             .height(74.dp)
             .clip(RoundedCornerShape(9.dp))
-            .background(if (hovered) AppColors.colors.surfaceHover else AppColors.colors.surface)
+            .background(if (hovered && hasLine) AppColors.colors.surfaceHover else AppColors.colors.surface)
             .border(
                 1.dp,
-                if (hovered) AppColors.colors.accent.copy(alpha = 0.5f) else AppColors.colors.border,
+                when {
+                    focused -> AppColors.colors.accent
+                    hovered && hasLine -> AppColors.colors.accent.copy(alpha = 0.5f)
+                    else -> AppColors.colors.border
+                },
                 RoundedCornerShape(9.dp),
             )
-            .hoverable(interaction)
+            .hoverable(interaction, enabled = hasLine)
             .clickable(enabled = hasLine, interactionSource = interaction, indication = null, onClick = onClick)
+            .semantics { if (!hasLine) disabled() }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.Center,
     ) {

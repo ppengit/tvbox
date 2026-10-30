@@ -118,8 +118,30 @@ class DesktopAppState(
     internal var speedTimerJob: Job? = null
     internal var followTimerJob: Job? = null
     internal var detailJob: Job? = null
+    internal var sourceSpeedJob: Job? = null
     internal var liveJob: Job? = null
     internal var platformLiveJob: Job? = null
+
+    /**
+     * 详情请求序号。渐进加载一次会推送多条更新，旧请求的迟到结果（含自动找线路、
+     * 续播提示、测速结果）必须能被识别并丢弃，否则会把上一部剧的状态写进新详情页。
+     */
+    internal var detailRequestId: Long = 0L
+
+    /** 平台直播解析请求序号：连点多个直播间时只让最后一次生效。 */
+    internal var liveResolveToken: Long = 0L
+
+    /** 观看进度落盘队列：同一部剧串行、只写最新一次。 */
+    internal val progressSaves = ProgressSaveQueue()
+
+    /** 设置整表保存队列：连续修改时只落最新快照，避免旧快照覆盖新值。 */
+    internal val settingsSaves = SettingsSaveQueue()
+
+    /** 删除/清空历史后让排队中的进度保存失效，避免记录被写回来。 */
+    internal val historyWriteGuard = com.tvbox.app.data.HistoryWriteGuard()
+
+    /** 记录播放器被换下来 / 刚关闭的媒体，用于把迟到的进度记到正确的剧集上。 */
+    internal val mediaProgress = MediaProgressTracker()
 
     internal fun updateHome(block: (HomeState) -> HomeState) {
         _home.value = block(_home.value)
@@ -196,6 +218,8 @@ class DesktopAppState(
                     AppSettings()
                 }
             _settings.value = _settings.value.copy(settings = loaded, ready = true)
+            // 记住磁盘上的基线：保存失败时界面要能退回到真正持久化的值。
+            settingsSaves.rememberPersisted(loaded)
             // 首页数据源来自设置，必须等设置就绪后再加载，否则会按默认源请求。
             loadHome(reset = true)
         }
@@ -230,8 +254,9 @@ class DesktopAppState(
     }
 
     fun navigate(target: DesktopScreen) {
+        // 播放页开着时切页等同于关掉播放页：必须走 closePlayer 才能把进度落盘。
         if (_player.value != null) {
-            setPlayer(null)
+            closePlayer()
         }
         setDetail(null)
         if (_screen.value == target) {

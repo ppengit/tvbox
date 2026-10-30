@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,6 +30,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -169,6 +171,8 @@ fun HomeScreen(
                             ContinueCard(
                                 item = item,
                                 followed = followMap["${item.apiLineId}:${item.movieId}"],
+                                resuming = history.resumingKey == item.historyKey,
+                                enabled = history.resumingKey == null,
                                 onClick = { state.resumeHistory(item) },
                             )
                         }
@@ -201,6 +205,7 @@ fun HomeScreen(
                         PosterCard(
                             item = item,
                             resolving = home.resolvingTitle == item.title,
+                            enabled = home.resolvingTitle == null,
                             onClick = { state.openDoubanItem(item) },
                         )
                     }
@@ -227,7 +232,7 @@ private val HomeState.isEmpty: Boolean
 
 private fun homeSubtitle(home: HomeState): String = when {
     home.mode == HomeFeedMode.Douban && home.items.isEmpty() -> "豆瓣热播"
-    home.mode == HomeFeedMode.Douban -> "豆瓣热播 · 共 ${home.items.size} 部"
+    home.mode == HomeFeedMode.Douban -> "豆瓣热播 · 已加载 ${home.items.size} 部"
     home.movies.isEmpty() -> "本站最新更新"
     else -> "本站最新 · 已加载 ${home.movies.size} 部"
 }
@@ -280,9 +285,13 @@ private fun heroSlides(state: DesktopAppState, home: HomeState): List<HeroSlide>
                 tag = "豆瓣热播",
                 score = item.score,
                 ratingCount = item.ratingCount,
-                actionText = if (home.resolvingTitle == item.title) "正在查找资源…" else "开始观看",
+                actionText = when {
+                    home.resolvingTitle == item.title -> "正在查找资源…"
+                    home.resolvingTitle != null -> "请稍候…"
+                    else -> "开始观看"
+                },
                 actionHint = "点击后从当前线路查找可播放资源",
-                enabled = home.resolvingTitle != item.title,
+                enabled = home.resolvingTitle == null,
                 onClick = { state.openDoubanItem(item) },
             )
         }
@@ -336,16 +345,21 @@ private fun FeaturedRow(slides: List<HeroSlide>) {
 private fun FeaturedCard(slide: HeroSlide, rank: Int, modifier: Modifier = Modifier) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(AppColors.colors.surfaceRaised)
             .border(
                 1.dp,
-                if (hovered) AppColors.colors.accent.copy(alpha = 0.7f) else AppColors.colors.border,
+                when {
+                    focused -> AppColors.colors.accent
+                    hovered && slide.enabled -> AppColors.colors.accent.copy(alpha = 0.7f)
+                    else -> AppColors.colors.border
+                },
                 RoundedCornerShape(12.dp),
             )
-            .hoverable(interaction)
+            .hoverable(interaction, enabled = slide.enabled)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
@@ -380,7 +394,7 @@ private fun FeaturedCard(slide: HeroSlide, rank: Int, modifier: Modifier = Modif
                 color = if (rank == 1) Color(0xFF06150E) else Color(0xE6FFFFFF),
             )
         }
-        if (hovered) {
+        if (hovered && slide.enabled) {
             Box(Modifier.fillMaxSize().background(Color(0x4D060A09)), contentAlignment = Alignment.Center) {
                 Box(
                     Modifier.size(44.dp).clip(CircleShape).background(Color(0xD929E68C)),
@@ -414,9 +428,9 @@ private fun FeaturedCard(slide: HeroSlide, rank: Int, modifier: Modifier = Modif
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(
-                    text = if (hovered) slide.actionText else slide.tag,
+                    text = if (hovered || !slide.enabled) slide.actionText else slide.tag,
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (hovered) AppColors.colors.accent else Color(0xB3FFFFFF),
+                    color = if (hovered || !slide.enabled) AppColors.colors.accent else Color(0xB3FFFFFF),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -433,17 +447,20 @@ private fun FeaturedCard(slide: HeroSlide, rank: Int, modifier: Modifier = Modif
 private fun ContinueCard(
     item: WatchHistoryItem,
     followed: FollowedShow?,
+    resuming: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     val total = maxOf(item.episodeCount, followed?.lastEpisodeCount ?: 0)
 
     Column(
         modifier = Modifier
             .width(152.dp)
-            .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .hoverable(interaction, enabled = enabled)
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick),
     ) {
         Box(
             Modifier
@@ -453,7 +470,11 @@ private fun ContinueCard(
                 .background(AppColors.colors.surfaceRaised)
                 .border(
                     1.dp,
-                    if (hovered) AppColors.colors.accent.copy(alpha = 0.65f) else AppColors.colors.border,
+                    when {
+                        focused || resuming -> AppColors.colors.accent
+                        hovered && enabled -> AppColors.colors.accent.copy(alpha = 0.65f)
+                        else -> AppColors.colors.border
+                    },
                     RoundedCornerShape(10.dp),
                 ),
         ) {
@@ -465,7 +486,23 @@ private fun ContinueCard(
                     ),
                 ),
             )
-            if (hovered) {
+            if (resuming) {
+                Box(Modifier.fillMaxSize().background(Color(0x99060A09)), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(26.dp),
+                            color = AppColors.colors.accent,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "正在续播…",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xF2FFFFFF),
+                        )
+                    }
+                }
+            } else if (hovered && enabled) {
                 Box(Modifier.fillMaxSize().background(Color(0x66060A09)), contentAlignment = Alignment.Center) {
                     Box(
                         Modifier
@@ -536,7 +573,7 @@ private fun ContinueCard(
         Text(
             item.movieName,
             style = MaterialTheme.typography.titleMedium,
-            color = if (hovered) AppColors.colors.accent else AppColors.colors.textPrimary,
+            color = if (hovered && enabled) AppColors.colors.accent else AppColors.colors.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -571,9 +608,6 @@ private fun ContinueCard(
         }
     }
 }
-
-private fun formatCount(count: Int): String =
-    if (count >= 10_000) "${count / 10_000}万" else count.toString()
 
 /** 继续观看卡片上的相对时间，扫一眼就知道上次看到是多久以前。 */
 private fun relativeTime(epochMs: Long): String {

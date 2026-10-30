@@ -64,38 +64,40 @@ class PersistentAppSettingsRepository(private val store: KeyValueStore) : AppSet
     }
 
     override suspend fun saveSettings(settings: AppSettings): AppSettings = withContext(Dispatchers.IO) {
-        store.edit {
-            putString(KEY_HOME_API_LINE_ID, settings.homeApiLineId)
-            putString(KEY_CUSTOM_VIDEO_API_LINES, json.encodeToString(settings.customVideoApiLines))
-            putString(KEY_THEME, settings.theme.storageKey)
-            putString(KEY_FONT_SCALE, settings.fontScale.storageKey)
-            putString(KEY_AI_PROVIDER_ID, settings.aiProviderId)
-            putString(KEY_AI_MODEL_NAME, settings.aiModelName)
-            putString(KEY_AI_API_KEY, settings.aiApiKey)
-            putBoolean(KEY_CHECK_UPDATES_ON_STARTUP, settings.checkUpdatesOnStartup)
-            putBoolean(KEY_PLAYBACK_AGENT_AUTO_SWITCH, settings.playbackAgentAutoSwitchEnabled)
-            putString(KEY_VIDEO_SCALE_MODE, settings.videoScaleMode.storageKey)
-            putString(KEY_DEVICE_MODE, settings.deviceMode.storageKey)
-            putFloat(
-                KEY_PLAYBACK_SPEED,
-                settings.preferredPlaybackSpeed.takeIf { it in PlayerRemotePolicy.speedOptions } ?: 1f,
-            )
-            putString(KEY_PROXY_MODE, settings.proxyMode)
-            putString(KEY_PROXY_HOST, settings.proxyHost)
-            putString(KEY_PROXY_PORT, settings.proxyPort.toString())
-            putString(KEY_HOME_FEED, settings.homeFeed)
-            putBoolean(KEY_PREFER_FASTEST_LINE, settings.preferFastestLine)
-            putBoolean(KEY_SPEED_TEST_ON_OPEN, settings.speedTestOnOpen)
-            putString(KEY_SPEED_TEST_INTERVAL, settings.speedTestIntervalMinutes.toString())
-            putString(KEY_AUTO_SWITCH_THRESHOLD, settings.autoSwitchErrorThreshold.toString())
-            putString(KEY_BUFFERING_TIMEOUT, settings.bufferingTimeoutSeconds.toString())
-            putString(KEY_PREFETCH_EPISODES, settings.prefetchEpisodeCount.toString())
-            putString(KEY_IMAGE_CACHE_MB, settings.imageCacheMaxMb.toString())
-            putString(KEY_PLAYER_BUFFER_MB, settings.playerBufferMb.toString())
-            putString(KEY_FOLLOW_REFRESH, settings.followRefreshMinutes.toString())
-            putBoolean(KEY_AUTO_SKIP_INTRO, settings.autoSkipIntro)
-            putBoolean(KEY_AUTO_SKIP_OUTRO, settings.autoSkipOutro)
-        }
+        check(
+            store.edit {
+                putString(KEY_HOME_API_LINE_ID, settings.homeApiLineId)
+                putString(KEY_CUSTOM_VIDEO_API_LINES, json.encodeToString(settings.customVideoApiLines))
+                putString(KEY_THEME, settings.theme.storageKey)
+                putString(KEY_FONT_SCALE, settings.fontScale.storageKey)
+                putString(KEY_AI_PROVIDER_ID, settings.aiProviderId)
+                putString(KEY_AI_MODEL_NAME, settings.aiModelName)
+                putString(KEY_AI_API_KEY, settings.aiApiKey)
+                putBoolean(KEY_CHECK_UPDATES_ON_STARTUP, settings.checkUpdatesOnStartup)
+                putBoolean(KEY_PLAYBACK_AGENT_AUTO_SWITCH, settings.playbackAgentAutoSwitchEnabled)
+                putString(KEY_VIDEO_SCALE_MODE, settings.videoScaleMode.storageKey)
+                putString(KEY_DEVICE_MODE, settings.deviceMode.storageKey)
+                putFloat(
+                    KEY_PLAYBACK_SPEED,
+                    settings.preferredPlaybackSpeed.takeIf { it in PlayerRemotePolicy.speedOptions } ?: 1f,
+                )
+                putString(KEY_PROXY_MODE, settings.proxyMode)
+                putString(KEY_PROXY_HOST, settings.proxyHost)
+                putString(KEY_PROXY_PORT, settings.proxyPort.toString())
+                putString(KEY_HOME_FEED, settings.homeFeed)
+                putBoolean(KEY_PREFER_FASTEST_LINE, settings.preferFastestLine)
+                putBoolean(KEY_SPEED_TEST_ON_OPEN, settings.speedTestOnOpen)
+                putString(KEY_SPEED_TEST_INTERVAL, settings.speedTestIntervalMinutes.toString())
+                putString(KEY_AUTO_SWITCH_THRESHOLD, settings.autoSwitchErrorThreshold.toString())
+                putString(KEY_BUFFERING_TIMEOUT, settings.bufferingTimeoutSeconds.toString())
+                putString(KEY_PREFETCH_EPISODES, settings.prefetchEpisodeCount.toString())
+                putString(KEY_IMAGE_CACHE_MB, settings.imageCacheMaxMb.toString())
+                putString(KEY_PLAYER_BUFFER_MB, settings.playerBufferMb.toString())
+                putString(KEY_FOLLOW_REFRESH, settings.followRefreshMinutes.toString())
+                putBoolean(KEY_AUTO_SKIP_INTRO, settings.autoSkipIntro)
+                putBoolean(KEY_AUTO_SKIP_OUTRO, settings.autoSkipOutro)
+            },
+        ) { "设置保存失败" }
         settings
     }
 

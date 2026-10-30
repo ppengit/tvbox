@@ -8,6 +8,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 interface MacCmsApi {
@@ -40,12 +41,15 @@ object MacCmsNetwork {
             .writeTimeout(20, TimeUnit.SECONDS),
     ).build()
 
-    private val apis = mutableMapOf<String, MacCmsApi>()
+    private val apis = ConcurrentHashMap<String, MacCmsApi>()
 
     fun api(baseUrl: String): MacCmsApi {
-        return apis.getOrPut(baseUrl) {
+        // Retrofit 要求 baseUrl 以 "/" 结尾，否则 getVod 的 "." 会把最后一段路径吃掉；
+        // 自定义线路经常只填到 api.php/provide/vod，这里统一补全。
+        val normalized = baseUrl.trim().let { if (it.endsWith("/")) it else "$it/" }
+        return apis.computeIfAbsent(normalized) { url ->
             Retrofit.Builder()
-                .baseUrl(baseUrl)
+                .baseUrl(url)
                 .client(client)
                 .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
                 .build()

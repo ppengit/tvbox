@@ -5,6 +5,7 @@ import coil3.PlatformContext
 import coil3.disk.DiskCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.tvbox.app.data.DOUBAN_REFERER
+import com.tvbox.app.data.NetworkProxy
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -44,13 +45,15 @@ fun createDesktopImageLoader(
         .diskCache {
             DiskCache.Builder()
                 .directory(DesktopPaths.cache.resolve("images").toOkioPath())
-                .maxSizeBytes(maxDiskBytes)
+                // 设置文件可能被手工改成 0/负数；Coil 要求缓存上限为正数，否则启动即崩。
+                .maxSizeBytes(maxDiskBytes.coerceAtLeast(1L))
                 .build()
         }
         .build())
 
 private val DesktopImageHttpClient: OkHttpClient by lazy {
-    OkHttpClient.Builder()
+    // 图片和接口走同一套代理策略，否则用户设置代理后会出现「能搜到片、海报全裂」。
+    NetworkProxy.applyTo(OkHttpClient.Builder())
         .addInterceptor(DoubanImageInterceptor)
         .build()
 }

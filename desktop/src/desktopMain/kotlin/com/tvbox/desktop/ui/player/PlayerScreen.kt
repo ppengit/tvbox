@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -57,6 +59,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -95,6 +98,14 @@ private const val SEEK_STEP_MS = 10_000L
 private const val VOLUME_STEP = 0.05f
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
+private data class SeekHint(
+    val forward: Boolean,
+    val seconds: Long,
+    val targetMs: Long,
+    val durationMs: Long,
+    val nonce: Int,
+)
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun PlayerScreen(
@@ -120,6 +131,9 @@ fun PlayerScreen(
     var pendingStart by remember(playerState.currentUrl) { mutableLongStateOf(playerState.startPositionMs) }
     var showSourceMenu by remember { mutableStateOf(false) }
     var errorStreak by remember(playerState.currentUrl) { mutableIntStateOf(0) }
+    // 换源后旧媒体的 Error 仍留在 mediaStatus 里：同一个错误对象只处理一次，
+    // 否则一次起播失败会被当成新线路的失败，连续跳过多条本来可用的线路。
+    var lastHandledError by remember { mutableStateOf<Throwable?>(null) }
     var bufferingStartedAt by remember { mutableLongStateOf(0L) }
 
     val durationMs = mediaProps?.durationMillis ?: 0L
@@ -135,6 +149,13 @@ fun PlayerScreen(
         .filter { it.value.ok }
         .minWithOrNull(compareBy({ it.value.latencyMs.coerceAtLeast(1L) }, { -it.value.kbps }))
         ?.key
+    // 点播到第一集/最后一集时禁用切集按钮，避免「点了没反应」；直播频道首尾循环，保持可用。
+    val hasPreviousEpisode = playerState.isLive || playerState.episodeIndex > 0
+    val hasNextEpisode = playerState.isLive || playerState.episodeCount <= 0 ||
+        playerState.episodeIndex < playerState.episodeCount - 1
+    val currentLiveChannel = playerState.liveChannels.getOrNull(playerState.liveChannelIndex)
+    val canSwitchLiveLine = playerState.isLive && playerState.platformStream == null &&
+        (currentLiveChannel?.lines?.size ?: 0) > 1
     val skipState by state.skipMarks.collectAsState()
     val marks = playerState.movie?.let { skipState["${it.apiLineId}:${it.id}"] }
     var skipPanelOpen by remember { mutableStateOf(false) }
@@ -142,6 +163,12 @@ fun PlayerScreen(
     var outroHandled by remember(playerState.currentUrl) { mutableStateOf(false) }
     var introCountdown by remember(playerState.currentUrl) { mutableIntStateOf(0) }
     var outroCountdown by remember(playerState.currentUrl) { mutableIntStateOf(0) }
+    var readySinceOpen by remember(playerState.currentUrl) { mutableStateOf(false) }
+    var openingSeconds by remember(playerState.currentUrl) { mutableIntStateOf(0) }
+    var seekHint by remember { mutableStateOf<SeekHint?>(null) }
+    var seekAccumulatedMs by remember { mutableLongStateOf(0L) }
+    var seekLastAtMs by remember { mutableLongStateOf(0L) }
+    var seekTargetMs by remember { mutableLongStateOf(0L) }
 
     val introEndMs = marks?.introEndMs ?: 0L
     val outroStartMs = marks?.outroStartMs ?: 0L
@@ -163,11 +190,40 @@ fun PlayerScreen(
         runCatching { speedFeature?.set(next) }
     }
 
+    /**
+     * 方向键快进/快退：单次 10 秒，连续按键在 0.9 秒内累加并给出一块 OSD，
+     * 让用户看到「本次一共快进了多少、目标位置在哪」，而不是只跳一下没有任何反馈。
+     */
+    fun seekBy(deltaMs: Long) {
+        val now = System.currentTimeMillis()
+        val continuing = seekAccumulatedMs != 0L &&
+            (seekAccumulatedMs > 0L) == (deltaMs > 0L) &&
+            now - seekLastAtMs <= 900L
+        val accumulated = if (continuing) seekAccumulatedMs + deltaMs else deltaMs
+        val base = if (continuing) seekTargetMs else positionMs
+        val upper = durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE
+        val target = (base + deltaMs).coerceIn(0L, upper)
+        seekAccumulatedMs = accumulated
+        seekLastAtMs = now
+        seekTargetMs = target
+        player.seekTo(target)
+        seekHint = SeekHint(
+            forward = accumulated > 0L,
+            seconds = kotlin.math.abs(accumulated) / 1000,
+            targetMs = target,
+            durationMs = durationMs,
+            nonce = (seekHint?.nonce ?: 0) + 1,
+        )
+        markInteraction()
+    }
+
     // 装载媒体：URL 变化时重新打开，起始位置默认沿用进度。
     LaunchedEffect(playerState.currentUrl, retryToken) {
         if (playerState.currentUrl.isBlank()) return@LaunchedEffect
         errorMessage = null
         errorStreak = 0
+        readySinceOpen = false
+        openingSeconds = 0
         bufferingStartedAt = 0L
         runCatching {
             player.setMediaData(
@@ -181,11 +237,26 @@ fun PlayerScreen(
             )
             applySpeed(speed)
         }.onFailure { throwable ->
-            errorMessage = throwable.localizedMessage ?: "无法打开该线路"
-            if (!playerState.isLive) {
-                state.recordPlaybackIssue(PlaybackIssueType.Error)
+            val reason = throwable.localizedMessage ?: "无法打开该线路"
+            // 起播就失败时，只要还有其他线路就静默换源，不把错误先抛给用户。
+            val canTryFailover = !playerState.isLive && options.size > 1
+            val switched = canTryFailover && state.handlePlaybackFailure(reason)
+            if (switched) {
+                errorMessage = null
+                errorStreak = 0
+            } else {
+                errorMessage = reason
+                // handlePlaybackFailure 已经在失败线路上记过一次，这里不要再记一遍。
+                if (!playerState.isLive && !canTryFailover) {
+                    state.recordPlaybackIssue(PlaybackIssueType.Error)
+                }
             }
         }
+    }
+
+    // 用户主动点「重试」：允许同一个错误对象再被处理一次。
+    LaunchedEffect(retryToken) {
+        if (retryToken > 0) lastHandledError = null
     }
 
     // 播放结束：点播自动下一集；直播不处理。
@@ -202,23 +273,41 @@ fun PlayerScreen(
     LaunchedEffect(playState.mediaStatus, playerState.currentUrl) {
         when (val status = playState.mediaStatus) {
             is MediaStatus.Error -> {
-                val reason = status.error.localizedMessage ?: "播放失败"
+                val mediaError = status.error
+                // 换源后 mediaStatus 仍是旧线路的 Error：同一个错误只处理一次。
+                if (lastHandledError === mediaError) return@LaunchedEffect
+                lastHandledError = mediaError
+                val reason = mediaError.localizedMessage ?: "播放失败"
                 errorStreak++
+                // 还没出过画面的首次起播：哪怕用户关了自动避障，也要先把其他线路试一遍；
+                // 出过画面之后的异常才交给“自动避障”设置决定。
                 val canFailover = !playerState.isLive &&
-                    state.effectiveAutoSwitch(playerState.movie) &&
-                    errorStreak >= settings.autoSwitchErrorThreshold.coerceAtLeast(1) &&
-                    options.size > 1
-                if (canFailover && state.handlePlaybackFailure(reason)) {
-                    errorMessage = null
-                    errorStreak = 0
+                    options.size > 1 &&
+                    (!readySinceOpen || state.effectiveAutoSwitch(playerState.movie))
+                val threshold = if (readySinceOpen) {
+                    settings.autoSwitchErrorThreshold.coerceAtLeast(1)
+                } else {
+                    1
+                }
+                if (canFailover && errorStreak >= threshold) {
+                    // 换源失败（所有线路都试过）时，这条错误已经由状态层记录。
+                    if (state.handlePlaybackFailure(reason)) {
+                        errorMessage = null
+                        errorStreak = 0
+                    } else {
+                        errorMessage = reason
+                    }
                 } else {
                     errorMessage = reason
                     if (!playerState.isLive) state.recordPlaybackIssue(PlaybackIssueType.Error)
                 }
             }
             MediaStatus.Ready -> {
+                // 新媒体正常出画面后，后续同名错误要重新计数。
+                lastHandledError = null
                 errorMessage = null
                 errorStreak = 0
+                readySinceOpen = true
                 if (!playerState.isLive) state.recordPlaybackSuccess()
             }
             else -> Unit
@@ -290,6 +379,29 @@ fun PlayerScreen(
         }
     }
 
+    // 快进/快退提示停留 1.4 秒后自动消失。
+    LaunchedEffect(seekHint?.nonce) {
+        val hint = seekHint ?: return@LaunchedEffect
+        delay(1_400)
+        if (seekHint?.nonce == hint.nonce) seekHint = null
+    }
+
+    // 起播计时：用于在加载层里显示等待秒数，超过缓冲阈值时明确提示会自动换源。
+    LaunchedEffect(playerState.currentUrl) {
+        openingSeconds = 0
+        while (!readySinceOpen) {
+            delay(1_000)
+            if (!readySinceOpen) openingSeconds++
+        }
+    }
+
+    LaunchedEffect(playerState.switchNotice) {
+        if (playerState.switchNotice != null) {
+            delay(4_000)
+            state.clearSwitchNotice()
+        }
+    }
+
     // 控制层自动隐藏。面板展开期间保持可见，否则面板会随控制层一起消失。
     LaunchedEffect(lastInteraction, playState.playWhenReady, showSourceMenu, skipPanelOpen, errorMessage) {
         while (true) {
@@ -326,12 +438,12 @@ fun PlayerScreen(
                         true
                     }
                     Key.DirectionLeft -> {
-                        player.seekTo((positionMs - SEEK_STEP_MS).coerceAtLeast(0L))
+                        if (!playerState.isLive) seekBy(-SEEK_STEP_MS)
                         markInteraction()
                         true
                     }
                     Key.DirectionRight -> {
-                        player.seekTo((positionMs + SEEK_STEP_MS).coerceAtMost(durationMs.coerceAtLeast(positionMs)))
+                        if (!playerState.isLive) seekBy(SEEK_STEP_MS)
                         markInteraction()
                         true
                     }
@@ -350,12 +462,12 @@ fun PlayerScreen(
                         markInteraction()
                         true
                     }
-                    Key.Equals -> {
+                    Key.Equals, Key.Plus, Key.NumPadAdd -> {
                         applySpeed(SPEED_OPTIONS.firstOrNull { it > speed } ?: SPEED_OPTIONS.last())
                         markInteraction()
                         true
                     }
-                    Key.Minus -> {
+                    Key.Minus, Key.NumPadSubtract -> {
                         applySpeed(SPEED_OPTIONS.lastOrNull { it < speed } ?: SPEED_OPTIONS.first())
                         markInteraction()
                         true
@@ -400,8 +512,89 @@ fun PlayerScreen(
         MediampPlayerSurface(player, Modifier.fillMaxSize())
 
         if (playState.isLoadingOrBuffering() && errorMessage == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                BufferedSpinner(42.dp)
+            Box(Modifier.fillMaxSize().background(Color(0x66000000)), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    BufferedSpinner(44.dp)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = if (!readySinceOpen) {
+                            "正在打开「${playerState.sourceName.ifBlank { "当前线路" }}」"
+                        } else {
+                            "缓冲中…"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                    )
+                    // 直播没有「集」的概念，起播层不要拼出「第 1 集」这种误导文案。
+                    val loadingSubtitle = if (playerState.isLive) {
+                        ""
+                    } else {
+                        listOfNotNull(
+                            playerState.episodeTitle.takeIf { it.isNotBlank() },
+                            "第 ${playerState.episodeIndex + 1} 集",
+                        ).distinct().joinToString(" · ")
+                    }
+                    if (loadingSubtitle.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = loadingSubtitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xB3FFFFFF),
+                        )
+                    }
+                    if (!readySinceOpen && openingSeconds >= 1) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = if (openingSeconds >= 4) {
+                                "已等待 ${openingSeconds} 秒，超过 ${settings.bufferingTimeoutSeconds} 秒无画面会自动切换线路"
+                            } else {
+                                "已等待 ${openingSeconds} 秒，线路较慢时会自动切换"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0x99FFFFFF),
+                        )
+                    }
+                }
+            }
+        }
+
+        // 快进/快退反馈：连续按键时显示累计秒数和目标位置，避免“按了没反应”的错觉。
+        AnimatedVisibility(
+            visible = seekHint != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 128.dp),
+        ) {
+            val hint = seekHint ?: return@AnimatedVisibility
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xD9101615))
+                    .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (hint.forward) "▶▶" else "◀◀",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AppColors.colors.accent,
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = "${if (hint.forward) "快进" else "快退"} ${hint.seconds} 秒",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                )
+                Spacer(Modifier.width(14.dp))
+                Text(
+                    text = if (hint.durationMs > 0L) {
+                        "${formatTime(hint.targetMs)} / ${formatTime(hint.durationMs)}"
+                    } else {
+                        formatTime(hint.targetMs)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xB3FFFFFF),
+                )
             }
         }
 
@@ -503,10 +696,18 @@ fun PlayerScreen(
                                 SkipNextIcon(Color.White, 20.dp)
                             }
                         } else {
-                            ControlIconButton(label = "上一集", onClick = { state.playPreviousEpisode(); markInteraction() }) {
+                            ControlIconButton(
+                                label = "上一集",
+                                enabled = hasPreviousEpisode,
+                                onClick = { state.playPreviousEpisode(); markInteraction() },
+                            ) {
                                 SkipPreviousIcon(Color.White, 20.dp)
                             }
-                            ControlIconButton(label = "下一集", onClick = { state.playNextEpisode(); markInteraction() }) {
+                            ControlIconButton(
+                                label = "下一集",
+                                enabled = hasNextEpisode,
+                                onClick = { state.playNextEpisode(); markInteraction() },
+                            ) {
                                 SkipNextIcon(Color.White, 20.dp)
                             }
                         }
@@ -567,6 +768,7 @@ fun PlayerScreen(
                                     append(playerState.sourceName.ifBlank { "线路 ${playerState.sourceIndex + 1}" })
                                     if (fastestIndex == playerState.sourceIndex) append(" · 最快")
                                 },
+                                modifier = Modifier.widthIn(max = 240.dp),
                                 onClick = {
                                     showSourceMenu = !showSourceMenu
                                     if (showSourceMenu) skipPanelOpen = false
@@ -575,7 +777,7 @@ fun PlayerScreen(
                             )
                             Spacer(Modifier.width(8.dp))
                         }
-                        if (playerState.isLive && playerState.platformStream == null) {
+                        if (canSwitchLiveLine) {
                             TextChip(
                                 text = "换线路",
                                 onClick = {
@@ -611,12 +813,14 @@ fun PlayerScreen(
                 autoOutro = settings.autoSkipOutro,
                 onSetIntro = { playerState.movie?.let { state.setIntroEnd(it, positionMs) } },
                 onSetOutro = { playerState.movie?.let { state.setOutroStart(it, positionMs) } },
+                onClearIntro = { playerState.movie?.let { state.clearIntroMark(it) } },
+                onClearOutro = { playerState.movie?.let { state.clearOutroMark(it) } },
                 onClear = { playerState.movie?.let { state.clearSkipMarks(it) } },
                 onToggleIntro = {
-                    state.saveSettings { config -> config.copy(autoSkipIntro = !config.autoSkipIntro) }
+                    state.saveSettings { it.copy(autoSkipIntro = !settings.autoSkipIntro) }
                 },
                 onToggleOutro = {
-                    state.saveSettings { config -> config.copy(autoSkipOutro = !config.autoSkipOutro) }
+                    state.saveSettings { it.copy(autoSkipOutro = !settings.autoSkipOutro) }
                 },
                 onDismiss = { skipPanelOpen = false },
                 // 贴着控制栏右侧弹出，和「片头尾」胶囊在同一侧，不要飘到窗口最左边。
@@ -641,7 +845,8 @@ fun PlayerScreen(
         }
 
         // 片头/片尾提示：右下角浮层，点击立即跳过，倒计时结束自动执行。
-        if (!playerState.isLive && (inIntro || inOutro)) {
+        // 片头尾面板或线路菜单展开时隐藏，否则三者都贴右下角会互相压住。
+        if (!playerState.isLive && (inIntro || inOutro) && !skipPanelOpen && !showSourceMenu) {
             Column(
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 28.dp, bottom = 112.dp),
                 horizontalAlignment = Alignment.End,
@@ -715,6 +920,13 @@ fun PlayerScreen(
                                 markInteraction()
                             }
                         }
+                        if (canSwitchLiveLine) {
+                            PlayerActionButton("换线路") {
+                                errorMessage = null
+                                state.stepLiveLine(1)
+                                markInteraction()
+                            }
+                        }
                         PlayerActionButton("返回") { state.closePlayer() }
                     }
                     Spacer(Modifier.height(14.dp))
@@ -727,7 +939,7 @@ fun PlayerScreen(
             }
         }
 
-        if (playerState.switchNotice != null && controlsVisible) {
+        if (playerState.switchNotice != null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Box(
                     Modifier
@@ -777,6 +989,8 @@ private fun SkipPanel(
     autoOutro: Boolean,
     onSetIntro: () -> Unit,
     onSetOutro: () -> Unit,
+    onClearIntro: () -> Unit,
+    onClearOutro: () -> Unit,
     onClear: () -> Unit,
     onToggleIntro: () -> Unit,
     onToggleOutro: () -> Unit,
@@ -812,6 +1026,7 @@ private fun SkipPanel(
             value = formatSkipTime(marks?.introEndMs ?: 0L),
             action = "用当前 ${formatSkipTime(positionMs)}",
             onSet = onSetIntro,
+            onClear = onClearIntro.takeIf { marks?.hasIntro == true },
         )
         Spacer(Modifier.height(8.dp))
         MarkRow(
@@ -819,6 +1034,7 @@ private fun SkipPanel(
             value = formatSkipTime(marks?.outroStartMs ?: 0L),
             action = "用当前 ${formatSkipTime(positionMs)}",
             onSet = onSetOutro,
+            onClear = onClearOutro.takeIf { marks?.hasOutro == true },
         )
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -862,7 +1078,13 @@ private fun PanelCloseButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun MarkRow(label: String, value: String, action: String, onSet: () -> Unit) {
+private fun MarkRow(
+    label: String,
+    value: String,
+    action: String,
+    onSet: () -> Unit,
+    onClear: (() -> Unit)? = null,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(label, style = MaterialTheme.typography.labelMedium, color = AppColors.colors.textTertiary)
@@ -871,6 +1093,17 @@ private fun MarkRow(label: String, value: String, action: String, onSet: () -> U
                 style = MaterialTheme.typography.labelLarge,
                 color = AppColors.colors.textPrimary,
             )
+        }
+        if (onClear != null) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(5.dp))
+                    .clickable(onClick = onClear)
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+            ) {
+                Text("清除", style = MaterialTheme.typography.labelMedium, color = AppColors.colors.danger)
+            }
+            Spacer(Modifier.width(4.dp))
         }
         Box(
             Modifier
@@ -933,7 +1166,12 @@ private fun SkipPrompt(title: String, detail: String, onClick: () -> Unit) {
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ControlIconButton(label: String, onClick: () -> Unit, content: @Composable () -> Unit) {
+private fun ControlIconButton(
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     TooltipArea(
@@ -952,10 +1190,15 @@ private fun ControlIconButton(label: String, onClick: () -> Unit, content: @Comp
             modifier = Modifier
                 .size(38.dp)
                 .clip(CircleShape)
-                .background(if (hovered) Color(0x33FFFFFF) else Color.Transparent)
-                .semantics { contentDescription = label; role = Role.Button }
-                .hoverable(interaction)
-                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+                .background(if (hovered && enabled) Color(0x33FFFFFF) else Color.Transparent)
+                .semantics {
+                    contentDescription = label
+                    role = Role.Button
+                    if (!enabled) disabled()
+                }
+                .hoverable(interaction, enabled = enabled)
+                .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+                .alpha(if (enabled) 1f else 0.4f),
             contentAlignment = Alignment.Center,
         ) {
             content()
@@ -964,11 +1207,16 @@ private fun ControlIconButton(label: String, onClick: () -> Unit, content: @Comp
 }
 
 @Composable
-private fun TextChip(text: String, onClick: () -> Unit, contentDescription: String = text) {
+private fun TextChip(
+    text: String,
+    onClick: () -> Unit,
+    contentDescription: String = text,
+    modifier: Modifier = Modifier,
+) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Box(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .background(if (hovered) Color(0x33FFFFFF) else Color(0x1AFFFFFF))
             .semantics { this.contentDescription = contentDescription; role = Role.Button }
@@ -981,6 +1229,7 @@ private fun TextChip(text: String, onClick: () -> Unit, contentDescription: Stri
             style = MaterialTheme.typography.labelMedium,
             color = Color(0xE6FFFFFF),
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -993,6 +1242,10 @@ private fun BackChip(onClick: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(7.dp))
             .background(if (hovered) Color(0x33FFFFFF) else Color(0x1AFFFFFF))
+            .semantics {
+                contentDescription = "返回"
+                role = Role.Button
+            }
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp),

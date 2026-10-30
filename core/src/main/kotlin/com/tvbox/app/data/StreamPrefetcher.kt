@@ -1,5 +1,6 @@
 package com.tvbox.app.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -30,14 +31,18 @@ class StreamPrefetcher(
             coroutineScope {
                 urls.distinct().take(MAX_URLS).map { url ->
                     async {
-                        runCatching {
+                        try {
                             val request = Request.Builder()
                                 .url(url)
                                 .head()
                                 .header("User-Agent", USER_AGENT)
                                 .build()
                             client.newCall(request).execute().use { response -> response.code }
-                        }.getOrNull()
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Throwable) {
+                            null
+                        }
                     }
                 }.awaitAll()
             }

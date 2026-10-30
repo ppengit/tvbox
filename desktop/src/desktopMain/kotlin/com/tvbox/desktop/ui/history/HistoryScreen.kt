@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,7 +39,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
@@ -154,6 +163,7 @@ fun HistoryScreen(
                         item = item,
                         followed = followMap["${item.apiLineId}:${item.movieId}"],
                         resuming = history.resumingKey == item.historyKey,
+                        enabled = history.resumingKey == null,
                         onResume = { state.resumeHistory(item) },
                         onRemove = { state.removeHistory(item) },
                     )
@@ -185,6 +195,8 @@ private fun ClearHistoryConfirmOverlay(
     onConfirm: () -> Unit,
 ) {
     val scrimInteraction = remember { MutableInteractionSource() }
+    val cancelFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { cancelFocus.requestFocus() } }
     val shape = RoundedCornerShape(12.dp)
     Box(
         Modifier
@@ -202,6 +214,14 @@ private fun ClearHistoryConfirmOverlay(
                 .background(AppColors.colors.surfaceRaised)
                 .border(1.dp, AppColors.colors.borderStrong, shape)
                 .pointerInput(Unit) { detectTapGestures { } }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                        onCancel()
+                        true
+                    } else {
+                        false
+                    }
+                }
                 .padding(24.dp)
                 .semantics { paneTitle = "确认清空观看历史" },
         ) {
@@ -223,7 +243,7 @@ private fun ClearHistoryConfirmOverlay(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                GhostButton(text = "取消", onClick = onCancel)
+                GhostButton(text = "取消", modifier = Modifier.focusRequester(cancelFocus), onClick = onCancel)
                 Spacer(Modifier.width(10.dp))
                 DangerButton(text = "清空", onClick = onConfirm)
             }
@@ -236,11 +256,13 @@ private fun HistoryCard(
     item: WatchHistoryItem,
     followed: FollowedShow?,
     resuming: Boolean,
+    enabled: Boolean,
     onResume: () -> Unit,
     onRemove: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     val hasNew = followed?.hasNewEpisodes == true
 
     Row(
@@ -250,13 +272,16 @@ private fun HistoryCard(
             .background(if (hovered || resuming) AppColors.colors.surfaceHover else AppColors.colors.surface)
             .border(
                 1.dp,
-                if (hasNew) AppColors.colors.accent.copy(alpha = 0.55f)
-                else if (hovered || resuming) AppColors.colors.borderStrong
-                else AppColors.colors.border,
+                when {
+                    focused -> AppColors.colors.accent
+                    hasNew -> AppColors.colors.accent.copy(alpha = 0.55f)
+                    hovered || resuming -> AppColors.colors.borderStrong
+                    else -> AppColors.colors.border
+                },
                 RoundedCornerShape(8.dp),
             )
-            .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onResume)
+            .hoverable(interaction, enabled = enabled)
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onResume)
             .padding(12.dp),
     ) {
         Box(
@@ -267,7 +292,7 @@ private fun HistoryCard(
                 .background(AppColors.colors.surfaceRaised),
         ) {
             PosterImage(item.posterUrl, item.movieName, Modifier.fillMaxSize())
-            if (hovered) {
+            if (hovered && enabled) {
                 Box(Modifier.fillMaxSize().background(Color(0xB3060A09)), contentAlignment = Alignment.Center) {
                     com.tvbox.desktop.ui.components.PlayIcon(color = AppColors.colors.accent, size = 26.dp)
                 }

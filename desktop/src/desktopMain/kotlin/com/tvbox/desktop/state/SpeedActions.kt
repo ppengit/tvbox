@@ -2,6 +2,7 @@ package com.tvbox.desktop.state
 
 import com.tvbox.app.data.AppLog
 import com.tvbox.app.data.SpeedResult
+import com.tvbox.app.domain.Movie
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -40,6 +41,8 @@ fun DesktopAppState.runLineSpeedTest() {
                 notify("线路测速全部失败，请检查网络或代理设置")
             }
         } catch (error: CancellationException) {
+            // 任务被取消（退出/重新调度）时 running 必须复位，否则之后再也点不动测速。
+            updateSpeedTest { it.copy(running = false) }
             throw error
         } catch (error: Throwable) {
             updateSpeedTest { it.copy(running = false) }
@@ -68,12 +71,28 @@ fun DesktopAppState.runSourceSpeedTest() {
     val movie = detailState.movie ?: return
     if (detailState.speedTesting || movie.playSources.isEmpty()) return
     val autoApply = effectivePreferFastest(movie)
+    val requestId = detailRequestId
+    // 测速是给「当前详情页」跑的：换剧之后旧结果不能写进新详情页，也不能拿旧剧的
+    // 线路下标去切新剧的播放器。
+    sourceSpeedJob?.cancel()
     updateDetail { it.copy(speedTesting = true) }
-    scopeRef.launch {
+    sourceSpeedJob = scopeRef.launch {
         try {
             val results = container.speedTester.measureSources(movie.playSources)
+            if (!isCurrentDetailMovie(movie, requestId)) return@launch
             updateDetail { current ->
-                current.copy(speedTesting = false, sourceSpeeds = results.mapIndexed { index, result -> index to result }.toMap())
+                val currentMovie = current.movie
+                if (currentMovie == null ||
+                    currentMovie.apiLineId != movie.apiLineId ||
+                    currentMovie.id != movie.id
+                ) {
+                    current
+                } else {
+                    current.copy(
+                        speedTesting = false,
+                        sourceSpeeds = results.mapIndexed { index, result -> index to result }.toMap(),
+                    )
+                }
             }
             val fastestIndex = results.indices.filter { results[it].ok }.minWithOrNull(
                 compareBy({ results[it].latencyMs.coerceAtLeast(1L) }, { -results[it].kbps }),
@@ -88,11 +107,18 @@ fun DesktopAppState.runSourceSpeedTest() {
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            updateDetail { it.copy(speedTesting = false) }
+            if (isCurrentDetailMovie(movie, requestId)) {
+                updateDetail { it.copy(speedTesting = false) }
+            }
             AppLog.error("Speed", "播放源测速异常：${error.userMessage()}")
         }
     }
 }
+
+/** 详情请求是否还是发起测速的那一次，且剧集没有被换掉。 */
+internal fun DesktopAppState.isCurrentDetailMovie(movie: Movie, requestId: Long): Boolean =
+    detailRequestId == requestId &&
+        detail.value?.movie?.let { it.apiLineId == movie.apiLineId && it.id == movie.id } == true
 
 fun DesktopAppState.clearLineSpeedResults() {
     updateSpeedTest { it.copy(lineResults = emptyMap(), lastRunAtMs = 0) }

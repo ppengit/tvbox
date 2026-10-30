@@ -4,6 +4,7 @@ import com.tvbox.app.domain.ApiLine
 import com.tvbox.app.domain.Category
 import com.tvbox.app.domain.Movie
 import com.tvbox.app.domain.PagedMovies
+import com.tvbox.app.domain.PlaySource
 import com.tvbox.app.domain.cleanHtml
 import com.tvbox.app.domain.isBlockedContent
 import com.tvbox.app.domain.parsePlaySources
@@ -12,6 +13,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import java.net.URI
 
 @Serializable
 data class MacCmsResponse(
@@ -44,8 +46,12 @@ data class MacCmsResponse(
             pageCount = pagecount.asInt(defaultValue = 1).coerceAtLeast(1),
             total = total.asInt(defaultValue = 0).coerceAtLeast(0),
             apiLine = apiLine,
-            categories = categories.filterNot { it.typeId in blockedCategoryIds }.mapNotNull { it.toDomainOrNull() },
-            movies = list.filterNot { it.typeId in blockedCategoryIds }.mapNotNull { it.toDomainOrNull(apiLine) },
+            categories = categories.filterNot { it.typeId in blockedCategoryIds }
+                .mapNotNull { it.toDomainOrNull() }
+                .distinctBy { it.id },
+            movies = list.filterNot { it.typeId in blockedCategoryIds }
+                .mapNotNull { it.toDomainOrNull(apiLine) }
+                .distinctBy { it.id },
         )
     }
 }
@@ -125,14 +131,18 @@ data class VodDto(
         ) {
             return null
         }
+        // 有的站点只返回 HTML 标签或空白，清洗后为空时不应生成一张空卡片。
+        val name = cleanHtml(vodName)
+        if (name.isBlank()) return null
+        val baseUrl = apiLine.baseUrls.firstOrNull()
         return Movie(
             id = vodId,
             apiLineId = apiLine.id,
             apiLineName = apiLine.name,
-            name = cleanHtml(vodName),
+            name = name,
             typeId = typeId,
             typeName = cleanHtml(typeName),
-            posterUrl = normalizePosterUrl(vodPic),
+            posterUrl = normalizePosterUrl(vodPic, baseUrl),
             remarks = cleanHtml(vodRemarks),
             year = cleanField(vodYear),
             area = cleanField(vodArea),
@@ -141,7 +151,7 @@ data class VodDto(
             director = cleanHtml(vodDirector),
             duration = cleanHtml(vodDuration),
             description = cleanHtml(vodContent.ifBlank { vodBlurb }),
-            playSources = parsePlaySources(vodPlayFrom, vodPlayUrl),
+            playSources = resolvePlaySources(vodPlayFrom, vodPlayUrl, baseUrl),
         )
     }
 }
@@ -150,12 +160,57 @@ data class VodDto(
 private fun cleanField(raw: String?): String =
     cleanHtml(raw).trim().trimStart('：', ':', '，', ',', '、', ' ').trim()
 
-private fun normalizePosterUrl(raw: String): String {
-    val normalized = raw.trim()
-        .removePrefix("[")
-        .substringBefore("]")
-        .ifBlank { raw.trim() }
-    return if (normalized.startsWith("//")) "https:$normalized" else normalized
+/**
+ * MacCMS 的 vod_pic 有时是 `["https://..."]` 这样的字符串化数组。
+ * 取第一个元素并去掉引号，再按接口地址补全相对路径。
+ */
+private fun normalizePosterUrl(raw: String, baseUrl: String?): String {
+    val trimmed = raw.trim()
+    if (trimmed.isBlank()) return ""
+    val candidate = if (trimmed.startsWith("[")) {
+        trimmed.removePrefix("[")
+            .substringBefore("]")
+            .split(',')
+            .firstOrNull()
+            ?.trim()
+            ?.trim('"', '\'', ' ')
+            .orEmpty()
+            .ifBlank { trimmed }
+    } else {
+        trimmed
+    }
+    return resolveUrl(candidate, baseUrl)
+}
+
+private fun resolvePlaySources(
+    playFrom: String,
+    playUrl: String,
+    baseUrl: String?,
+): List<PlaySource> = parsePlaySources(playFrom, playUrl).map { source ->
+    source.copy(
+        episodes = source.episodes.map { episode ->
+            episode.copy(url = resolveUrl(episode.url, baseUrl))
+        },
+    )
+}
+
+private val URL_SCHEME = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
+
+/**
+ * 把相对的剧集/海报地址按接口地址补全。播放地址里常见的 `magnet:`、`ed2k:` 等
+ * 自定义协议原样保留；协议相对地址统一升级为 https，避免桌面端明文请求被拦截。
+ */
+internal fun resolveUrl(raw: String, baseUrl: String?): String {
+    val value = raw.trim()
+    if (value.isBlank()) return ""
+    if (value.startsWith("//")) return "https:$value"
+    if (URL_SCHEME.containsMatchIn(value)) return value
+    // 自定义接口常只填到 .../api.php/provide/vod（没有结尾斜杠），
+    // 直接 URI.resolve 会把最后一段路径吃掉，补斜杠后才能拼出正确的资源地址。
+    val base = baseUrl?.trim().orEmpty()
+        .let { if (it.isNotEmpty() && !it.endsWith("/")) "$it/" else it }
+    if (base.isBlank()) return value
+    return runCatching { URI(base).resolve(value).toString() }.getOrDefault(value)
 }
 
 private fun JsonElement?.asInt(defaultValue: Int): Int {

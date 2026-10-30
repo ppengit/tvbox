@@ -10,6 +10,8 @@ import com.tvbox.app.domain.resolveHistoryEpisodePosition
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private const val HOME_API_FALLBACK = "liangzi"
 
@@ -135,7 +137,8 @@ fun DesktopAppState.refreshHome() {
  * 命中后进入详情页，由详情页继续补齐播放源。
  */
 fun DesktopAppState.openDoubanItem(item: DoubanHotItem) {
-    if (home.value.resolvingTitle == item.title) return
+    // 一次只解析一个条目：并发解析会让两个详情请求互相覆盖，也会重复弹提示。
+    if (home.value.resolvingTitle != null) return
     updateHome { it.copy(resolvingTitle = item.title) }
     scopeRef.launch {
         val apiLineId = homeApiLineId
@@ -257,6 +260,9 @@ fun DesktopAppState.search(keyword: String = search.value.query) {
 
 fun DesktopAppState.openDetail(movie: Movie, apiLineId: String = movie.apiLineId) {
     detailJob?.cancel()
+    sourceSpeedJob?.cancel()
+    sourceSpeedJob = null
+    detailRequestId++
     setDetail(
         DetailState(
             movie = movie,
@@ -270,17 +276,23 @@ fun DesktopAppState.openDetail(movie: Movie, apiLineId: String = movie.apiLineId
 
 fun DesktopAppState.openDetail(movieId: Int, apiLineId: String = homeApiLineId) {
     detailJob?.cancel()
+    sourceSpeedJob?.cancel()
+    sourceSpeedJob = null
+    detailRequestId++
     setDetail(DetailState(movie = null, loading = true))
     startDetailLoad(movieId, apiLineId, initial = null)
 }
 
 private fun DesktopAppState.startDetailLoad(movieId: Int, apiLineId: String, initial: Movie?) {
+    val requestId = detailRequestId
     detailJob = scopeRef.launch {
         var received = false
         var policyLoaded = false
         var lineFallbackTried = false
         try {
             movieRepository.getDetailProgressively(apiLineId = apiLineId, id = movieId).collect { update ->
+                // 用户已经打开了别的详情页：这次请求的后续更新全部作废。
+                if (detailRequestId != requestId) return@collect
                 received = true
                 updateDetail { current ->
                     val previousMovie = current.movie
@@ -325,12 +337,14 @@ private fun DesktopAppState.startDetailLoad(movieId: Int, apiLineId: String, ini
                             preferredLineId = homeApiLineId,
                             excludeApiLineId = apiLineId,
                         ) ?: return@launch
+                        if (detailRequestId != requestId) return@launch
                         if (detail.value?.movie?.name != update.movie.name) return@launch
                         notify("已自动切到「${found.first.apiLineName.ifBlank { found.second }}」线路")
                         openDetail(movie = found.first, apiLineId = found.second)
                     }
                 }
             }
+            if (detailRequestId != requestId) return@launch
             if (!received) {
                 updateDetail { it.copy(loading = false, error = "影片详情不存在") }
             } else if (settings.value.settings.speedTestOnOpen) {
@@ -339,26 +353,29 @@ private fun DesktopAppState.startDetailLoad(movieId: Int, apiLineId: String, ini
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            if (initial != null) {
-                updateDetail { it.copy(loading = false, error = error.userMessage()) }
-            } else {
-                updateDetail { it.copy(loading = false, error = error.userMessage()) }
-            }
+            if (detailRequestId != requestId) return@launch
+            updateDetail { it.copy(loading = false, error = error.userMessage()) }
         }
     }
     if (initial != null) {
-        loadResumeHint(movieId, apiLineId)
+        loadResumeHint(movieId, apiLineId, requestId)
     }
 }
 
-private fun DesktopAppState.loadResumeHint(movieId: Int, apiLineId: String) {
+private fun DesktopAppState.loadResumeHint(movieId: Int, apiLineId: String, requestId: Long) {
     scopeRef.launch {
         val item = runCatching { historyRepository.getHistory() }.getOrNull()
             // 不同源站的 id 可能撞车，必须连线路一起匹配，否则会把别的剧的进度挂上来。
             ?.firstOrNull { it.movieId == movieId && it.apiLineId == apiLineId }
             ?: return@launch
+        if (detailRequestId != requestId) return@launch
         updateDetail { current ->
-            if (current.movie?.id == movieId) current.copy(resumeHint = item) else current
+            val currentMovie = current.movie
+            if (currentMovie != null && currentMovie.id == movieId && currentMovie.apiLineId == apiLineId) {
+                current.copy(resumeHint = item)
+            } else {
+                current
+            }
         }
     }
 }
@@ -383,19 +400,42 @@ fun DesktopAppState.selectDetailEpisode(index: Int) {
 }
 
 /**
+ * 统一集数下这条线路播不了这一集时，换成第一条能播这一集的线路。
+ * 索引一律是统一集数下标，避免把线路自己的剧集下标当成统一下标用。
+ */
+internal fun playableSourceIndex(
+    matrix: com.tvbox.app.domain.EpisodeMatrix,
+    requested: Int,
+    episodeIndex: Int,
+): Int {
+    if (matrix.sources.isEmpty()) return 0
+    val safeRequested = requested.coerceIn(0, matrix.sources.lastIndex)
+    if (matrix.availability(safeRequested).getOrElse(episodeIndex) { false }) return safeRequested
+    return matrix.resolvePlayable(safeRequested, episodeIndex)?.first ?: safeRequested
+}
+
+/**
  * 是否自动换源取决于设置，命中冷却中的坏源时优先选健康线路。
  * 这段判断和电视端共用同一个 [com.tvbox.app.domain.PlaybackAgent]。
+ *
+ * PlaybackAgent 按「每条线路自己的剧集下标」判断候选，而桌面端传的是统一集数下标，
+ * 两者在线路集数不一致时会错位，所以结果必须再用 EpisodeMatrix 校验一次。
  */
 internal fun DesktopAppState.resolvePreferredSource(movie: Movie, requested: Int, episodeIndex: Int): Int {
-    val safeRequested = requested.coerceIn(0, movie.playSources.lastIndex.coerceAtLeast(0))
-    if (movie.playSources.isEmpty()) return 0
-    if (!settings.value.settings.playbackAgentAutoSwitchEnabled) return safeRequested
-    return playbackAgent.selectBestSource(
+    val sources = movie.playSources
+    if (sources.isEmpty()) return 0
+    val matrix = com.tvbox.app.domain.buildEpisodeMatrix(sources)
+    val safeRequested = requested.coerceIn(0, sources.lastIndex)
+    // 请求的线路在统一集数下没有这一集时，先按矩阵换到有这一集的线路。
+    val fallback = playableSourceIndex(matrix, safeRequested, episodeIndex)
+    if (!settings.value.settings.playbackAgentAutoSwitchEnabled) return fallback
+    val selected = playbackAgent.selectBestSource(
         movie = movie,
         requestedSourceIndex = safeRequested,
         episodeIndex = episodeIndex,
         healthSnapshot = settings.value.playbackHealth,
-    )?.sourceIndex ?: safeRequested
+    )?.sourceIndex ?: return fallback
+    return if (matrix.availability(selected).getOrElse(episodeIndex) { false }) selected else fallback
 }
 
 // endregion
@@ -412,29 +452,48 @@ fun DesktopAppState.loadHistory() {
 }
 
 fun DesktopAppState.resumeHistory(item: WatchHistoryItem) {
+    // 已经有一条续播在解析中：忽略重复点击，避免两个请求同时打开播放器。
+    if (history.value.resumingKey != null) return
+    updateHistory { it.copy(resumingKey = item.historyKey) }
     scopeRef.launch {
-        updateHistory { it.copy(resumingKey = item.historyKey) }
         try {
-            val movie = runCatching { movieRepository.getDetail(item.apiLineId, item.movieId) }.getOrNull()
-            // 原来的线路下架了就按片名自动找一条，不再把用户赶回搜索页。
-            ?: findMovieOnAnyLine(item.movieName, preferredLineId = homeApiLineId)?.also { (match, lineId) ->
-                notify("原线路不可用，已自动切到「${match.apiLineName.ifBlank { lineId }}」")
-            }?.first
-        if (movie == null) {
-            notify("各线路都没有找到《${item.movieName}》")
-            return@launch
-        }
-        val (sourceIndex, episodeIndex) = resolveHistoryEpisodePosition(movie, item)
-        setDetail(
-            DetailState(
-                movie = movie,
-                loading = false,
-                sourceIndex = sourceIndex,
-                episodeIndex = episodeIndex,
-                policy = runCatching { playbackPolicyRepository.find(item.apiLineId, item.movieId) }.getOrNull(),
-            ),
-        )
-        playDetailEpisode(sourceIndex = sourceIndex, episodeIndex = episodeIndex, startPositionMs = item.positionMs)
+            // 详情页上点「继续播放」时，同一部剧的详情已经加载好了：直接复用，
+            // 不要重新拉详情——那会把追剧状态、测速结果和续播提示一起重置掉。
+            val openedMovie = detail.value
+                ?.movie
+                ?.takeIf { it.apiLineId == item.apiLineId && it.id == item.movieId }
+            val movie = openedMovie ?: run {
+                detailJob?.cancel()
+                sourceSpeedJob?.cancel()
+                sourceSpeedJob = null
+                detailRequestId++
+                runCatching { movieRepository.getDetail(item.apiLineId, item.movieId) }.getOrNull()
+                    // 原来的线路下架了就按片名自动找一条，不再把用户赶回搜索页。
+                    ?: findMovieOnAnyLine(item.movieName, preferredLineId = homeApiLineId)?.also { (match, lineId) ->
+                        notify("原线路不可用，已自动切到「${match.apiLineName.ifBlank { lineId }}」")
+                    }?.first
+            }
+            if (movie == null) {
+                notify("各线路都没有找到《${item.movieName}》")
+                return@launch
+            }
+            val (sourceIndex, episodeIndex) = resolveHistoryEpisodePosition(movie, item)
+            if (openedMovie == null) {
+                setDetail(
+                    DetailState(
+                        movie = movie,
+                        movieId = movie.id,
+                        loading = false,
+                        sourceIndex = sourceIndex,
+                        episodeIndex = episodeIndex,
+                        policy = runCatching {
+                            playbackPolicyRepository.find(movie.apiLineId, movie.id)
+                        }.getOrNull(),
+                        followed = isFollowed(movie.apiLineId, movie.id),
+                    ),
+                )
+            }
+            playDetailEpisode(sourceIndex = sourceIndex, episodeIndex = episodeIndex, startPositionMs = item.positionMs)
         } finally {
             updateHistory { if (it.resumingKey == item.historyKey) it.copy(resumingKey = null) else it }
         }
@@ -446,7 +505,13 @@ private const val UNDO_NOTICE_DURATION_MS = 6_000L
 
 fun DesktopAppState.removeHistory(item: WatchHistoryItem) {
     scopeRef.launch {
-        runCatching { historyRepository.removeHistory(item.apiLineId, item.movieId) }
+        // 和进度保存共用一把锁：删除期间排队中的进度要么先写完（随后被删掉），
+        // 要么在删除后因为写守卫失效而直接丢弃，不会把记录复活。
+        val result = progressSaves.mutex.withLock {
+            historyWriteGuard.remove(item)
+            runCatching { historyRepository.removeHistory(item.apiLineId, item.movieId) }
+        }
+        result
             .onSuccess { items ->
                 updateHistory { HistoryState(items = items.filterNot { it.historyKey == item.historyKey }) }
                 // 删除前先保留整条快照，撤销时原样写回（含观看进度与时间）。
@@ -475,7 +540,11 @@ fun DesktopAppState.restoreHistory(item: WatchHistoryItem) {
 
 fun DesktopAppState.clearHistory() {
     scopeRef.launch {
-        runCatching { historyRepository.clearHistory() }
+        val result = progressSaves.mutex.withLock {
+            historyWriteGuard.clear()
+            runCatching { historyRepository.clearHistory() }
+        }
+        result
             .onSuccess {
                 updateHistory { HistoryState(items = emptyList()) }
                 notify("已清空全部观看记录", type = NoticeType.Success)
@@ -488,22 +557,64 @@ fun DesktopAppState.clearHistory() {
 
 // region 设置与播放健康度
 
+/**
+ * 设置保存队列。
+ *
+ * 设置是「整张表」持久化的：连续拨动多个开关时，多个协程并发写同一文件，
+ * 先发出的旧快照可能后落盘，把后改的值覆盖掉。这里只让最新快照真正写入，
+ * 并记住最后一次成功持久化的值，写失败时把界面回退到它，避免“看起来保存了”。
+ */
+internal class SettingsSaveQueue {
+    val mutex = Mutex()
+    private var version = 0L
+    private var persisted: AppSettings? = null
+
+    fun next(): Long {
+        version++
+        return version
+    }
+
+    fun isLatest(candidate: Long): Boolean = candidate == version
+
+    fun rememberPersisted(settings: AppSettings) {
+        persisted = settings
+    }
+
+    fun persistedOr(fallback: AppSettings): AppSettings = persisted ?: fallback
+}
+
 fun DesktopAppState.saveSettings(transform: (AppSettings) -> AppSettings) {
-    val next = transform(settings.value.settings)
+    val previous = settings.value.settings
+    val next = transform(previous)
+    if (next == previous) return
+    val version = settingsSaves.next()
     updateSettings { it.copy(settings = next, saving = true) }
     scopeRef.launch {
-        runCatching { settingsRepository.saveSettings(next) }
-            .onSuccess { saved ->
-                updateSettings { it.copy(settings = saved, saving = false) }
-                com.tvbox.app.data.NetworkProxy.configureFromSettings(saved)
-                restartSpeedTimer()
-                restartFollowTimer()
-                notify("设置已保存")
-            }
-            .onFailure { error ->
-                updateSettings { it.copy(saving = false) }
-                notify("保存设置失败：${error.userMessage()}")
-            }
+        settingsSaves.mutex.withLock {
+            // 已经有更新的快照在排队：这次不用写盘，等最新那次落盘即可。
+            if (!settingsSaves.isLatest(version)) return@withLock
+            runCatching { settingsRepository.saveSettings(next) }
+                .onSuccess { saved ->
+                    settingsSaves.rememberPersisted(saved)
+                    if (!settingsSaves.isLatest(version)) return@onSuccess
+                    updateSettings { it.copy(settings = saved, saving = false) }
+                    com.tvbox.app.data.NetworkProxy.configureFromSettings(saved)
+                    restartSpeedTimer()
+                    restartFollowTimer()
+                    notify("设置已保存")
+                }
+                .onFailure { error ->
+                    if (!settingsSaves.isLatest(version)) return@onFailure
+                    // 磁盘没写成功就不能继续显示未持久化的值。
+                    updateSettings {
+                        it.copy(
+                            settings = settingsSaves.persistedOr(previous),
+                            saving = false,
+                        )
+                    }
+                    notify("保存设置失败：${error.userMessage()}", type = NoticeType.Error)
+                }
+        }
     }
 }
 

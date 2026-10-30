@@ -355,11 +355,13 @@ fun PosterCard(
     item: DoubanHotItem,
     modifier: Modifier = Modifier,
     resolving: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val lift by animateFloatAsState(if (hovered) 1f else 0f, label = "posterLift")
+    val focused by interaction.collectIsFocusedAsState()
+    val lift by animateFloatAsState(if (hovered && enabled) 1f else 0f, label = "posterLift")
 
     Column(
         modifier = modifier
@@ -367,8 +369,8 @@ fun PosterCard(
             // 悬停抬升只用绘制偏移，不能改变布局高度，否则会把下一行顶下去。
             .graphicsLayer { translationY = -3.dp.toPx() * lift }
             .clip(RoundedCornerShape(DesktopMetrics.cardRadius))
-            .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .hoverable(interaction, enabled = enabled)
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick),
     ) {
         Box(
             modifier = Modifier
@@ -378,7 +380,11 @@ fun PosterCard(
                 .background(AppColors.colors.surfaceRaised)
                 .border(
                     width = 1.dp,
-                    color = if (hovered) AppColors.colors.accent.copy(alpha = 0.65f) else AppColors.colors.border,
+                    color = when {
+                        focused -> AppColors.colors.accent
+                        hovered && enabled -> AppColors.colors.accent.copy(alpha = 0.65f)
+                        else -> AppColors.colors.border
+                    },
                     shape = RoundedCornerShape(DesktopMetrics.cardRadius),
                 ),
         ) {
@@ -419,7 +425,7 @@ fun PosterCard(
                         Text("正在查找资源", style = MaterialTheme.typography.labelMedium, color = AppColors.colors.textSecondary)
                     }
                 }
-            } else if (hovered) {
+            } else if (hovered && enabled) {
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -442,7 +448,7 @@ fun PosterCard(
         Text(
             text = item.title,
             style = MaterialTheme.typography.titleMedium,
-            color = if (hovered) AppColors.colors.textPrimary else AppColors.colors.textSecondary,
+            color = if (hovered && enabled) AppColors.colors.textPrimary else AppColors.colors.textSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -463,6 +469,7 @@ fun PosterCard(
 fun MovieCard(movie: Movie, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     Column(
         modifier = modifier
             .width(DesktopMetrics.posterWidth)
@@ -478,7 +485,11 @@ fun MovieCard(movie: Movie, modifier: Modifier = Modifier, onClick: () -> Unit) 
                 .background(AppColors.colors.surfaceRaised)
                 .border(
                     1.dp,
-                    if (hovered) AppColors.colors.accent.copy(alpha = 0.65f) else AppColors.colors.border,
+                    when {
+                        focused -> AppColors.colors.accent
+                        hovered -> AppColors.colors.accent.copy(alpha = 0.65f)
+                        else -> AppColors.colors.border
+                    },
                     RoundedCornerShape(DesktopMetrics.cardRadius),
                 ),
         ) {

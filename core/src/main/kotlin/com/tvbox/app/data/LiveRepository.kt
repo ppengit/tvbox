@@ -29,6 +29,7 @@ class DefaultLiveRepository(
             try {
                 val request = Request.Builder()
                     .url(sourceUrl)
+                    .header("User-Agent", LIVE_SOURCE_UA)
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
@@ -52,3 +53,7 @@ private val LIVE_SOURCE_URLS = listOf(
     "http://20.205.10.127:8787/tvbox/result.txt",
     "https://tv.iill.top/m3u/Gather",
 )
+
+private const val LIVE_SOURCE_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"

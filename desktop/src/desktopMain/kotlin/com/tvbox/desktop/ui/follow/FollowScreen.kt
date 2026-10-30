@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,7 +42,6 @@ import com.tvbox.desktop.ui.components.EmptyBox
 import com.tvbox.desktop.ui.components.FollowIcon
 import com.tvbox.desktop.ui.components.GhostButton
 import com.tvbox.desktop.ui.components.InlineError
-import com.tvbox.desktop.ui.components.MediaProgressBar
 import com.tvbox.desktop.ui.components.PageHeader
 import com.tvbox.desktop.ui.components.PosterImage
 import com.tvbox.desktop.ui.components.PrimaryButton
@@ -125,7 +125,9 @@ fun FollowScreen(
 private fun FollowRow(item: FollowedShow, onClick: () -> Unit, onRemove: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     val borderColor = when {
+        focused -> AppColors.colors.accent
         item.hasNewEpisodes -> AppColors.colors.accent.copy(alpha = 0.55f)
         hovered -> AppColors.colors.borderStrong
         else -> AppColors.colors.border
@@ -177,7 +179,11 @@ private fun FollowRow(item: FollowedShow, onClick: () -> Unit, onRemove: () -> U
             Spacer(Modifier.height(6.dp))
             Text(
                 text = buildString {
-                    append("更新至 ${item.lastEpisodeCount} 集")
+                    if (item.displayEpisodeCount > 0) {
+                        append("更新至 ${item.displayEpisodeCount} 集")
+                    } else {
+                        append("集数未知")
+                    }
                     if (item.latestEpisodeTitle.isNotBlank()) append(" · ${item.latestEpisodeTitle}")
                     if (item.lastEpisodeIndex > 0) append(" · 看到第 ${item.lastEpisodeIndex + 1} 集")
                 },

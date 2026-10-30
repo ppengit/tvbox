@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +40,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,8 +57,10 @@ import com.tvbox.desktop.ui.components.Chip
 import com.tvbox.desktop.ui.components.EmptyBox
 import com.tvbox.desktop.ui.components.ErrorBox
 import com.tvbox.desktop.ui.components.GhostButton
+import com.tvbox.desktop.ui.components.InlineError
 import com.tvbox.desktop.ui.components.LoadingBox
 import com.tvbox.desktop.ui.components.PageHeader
+import com.tvbox.desktop.ui.components.PrimaryButton
 import com.tvbox.desktop.ui.theme.AppColors
 
 @Composable
@@ -98,11 +106,21 @@ private fun PlatformLiveContent(state: DesktopAppState, live: PlatformLiveState,
             }
 
             live.error != null && live.rooms.isEmpty() && live.favorites.isEmpty() -> {
-                ErrorBox(
-                    message = live.error,
-                    modifier = Modifier.fillMaxSize(),
-                    onRetry = { state.loadPlatformLiveSites() },
-                )
+                if (state.platformLiveServiceUrl.isBlank()) {
+                    EmptyBox(
+                        title = "还没有配置解析服务",
+                        description = "平台直播需要本机或远程的解析服务地址，在「设置 → 网络与数据源」里填写后即可浏览直播间",
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        PrimaryButton("前往设置") { state.navigate(DesktopScreen.Settings) }
+                    }
+                } else {
+                    ErrorBox(
+                        message = live.error,
+                        modifier = Modifier.fillMaxSize(),
+                        onRetry = { state.loadPlatformLiveSites() },
+                    )
+                }
             }
 
             live.showFavorites -> FavoritesView(state, live, Modifier.fillMaxSize())
@@ -133,14 +151,19 @@ private fun CategoryBrowser(state: DesktopAppState, live: PlatformLiveState, mod
         if (children.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 children.forEach { category ->
+                    val selected = category.id == live.selectedCategoryId
                     Text(
                         text = category.name,
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = if (category.id == live.selectedCategoryId) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (category.id == live.selectedCategoryId) AppColors.colors.accent else AppColors.colors.textTertiary,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) AppColors.colors.accent else AppColors.colors.textTertiary,
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .clickable { state.selectPlatformLiveCategory(category.id) }
+                            .clickable(role = Role.RadioButton) { state.selectPlatformLiveCategory(category.id) }
+                            .semantics {
+                                this.selected = selected
+                                role = Role.RadioButton
+                            }
                             .padding(horizontal = 8.dp, vertical = 5.dp),
                     )
                 }
@@ -148,7 +171,27 @@ private fun CategoryBrowser(state: DesktopAppState, live: PlatformLiveState, mod
             Spacer(Modifier.height(12.dp))
         }
 
-        if (live.rooms.isEmpty() && !live.loading) {
+        if (live.error != null && live.rooms.isNotEmpty()) {
+            InlineError(
+                message = live.error,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                onRetry = {
+                    if (live.page > 1) {
+                        state.loadPlatformLiveRooms()
+                    } else {
+                        live.selectedCategoryId?.let(state::selectPlatformLiveCategory)
+                    }
+                },
+            )
+        }
+
+        // 切分类时旧房间列表会保留到新一页返回；这里用加载态遮住旧内容，避免看错分类。
+        if (live.loading) {
+            LoadingBox("正在加载直播间…", Modifier.fillMaxSize())
+            return
+        }
+
+        if (live.rooms.isEmpty()) {
             EmptyBox(
                 title = "这个分类暂时没有直播间",
                 description = "换个分类或平台看看",
@@ -228,6 +271,7 @@ private fun RoomCard(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
     var imageFailed by remember(room.cover) { mutableStateOf(false) }
     Column(
         modifier = Modifier
@@ -236,7 +280,11 @@ private fun RoomCard(
             .background(if (hovered) AppColors.colors.surfaceHover else AppColors.colors.surface)
             .border(
                 1.dp,
-                if (hovered) AppColors.colors.borderStrong else AppColors.colors.border,
+                when {
+                    focused -> AppColors.colors.accent
+                    hovered -> AppColors.colors.borderStrong
+                    else -> AppColors.colors.border
+                },
                 RoundedCornerShape(11.dp),
             )
             .hoverable(interaction)
@@ -316,7 +364,11 @@ private fun FavoriteButton(favorite: Boolean, onClick: () -> Unit, modifier: Mod
             .clip(RoundedCornerShape(7.dp))
             .background(if (hovered || favorite) Color(0xCC06100C) else Color(0x6606100C))
             .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .semantics {
+                contentDescription = if (favorite) "取消收藏" else "收藏直播间"
+                role = Role.Button
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text(

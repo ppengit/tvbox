@@ -16,10 +16,18 @@ fun parseAppUpdateManifest(
 ): AppUpdate? {
     val dto = json.decodeFromString<AppUpdateManifestDto>(raw.trimStart('\uFEFF'))
     if (dto.versionCode <= currentVersionCode) return null
+    val apkUrl = dto.apkUrl.trim()
+    // 没有可下载地址的清单不能提示更新，否则用户点「更新」只会得到下载失败。
+    if (apkUrl.isBlank() ||
+        (!apkUrl.startsWith("https://", ignoreCase = true) &&
+            !apkUrl.startsWith("http://", ignoreCase = true))
+    ) {
+        return null
+    }
     return AppUpdate(
         versionCode = dto.versionCode,
         versionName = dto.versionName.trim(),
-        apkUrl = dto.apkUrl.trim(),
+        apkUrl = apkUrl,
         apkSha256 = dto.apkSha256.trim(),
         apkSize = dto.apkSize.coerceAtLeast(0L),
         force = dto.force,

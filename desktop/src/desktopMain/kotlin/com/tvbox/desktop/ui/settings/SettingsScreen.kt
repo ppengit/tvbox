@@ -170,6 +170,7 @@ fun SettingsScreen(state: DesktopAppState, modifier: Modifier = Modifier) {
                             SettingsSection.Playback -> PlaybackSection(
                                 state = state,
                                 settings = settings,
+                                allLines = allLines,
                                 speedState = speedState,
                                 followState = followState,
                             )
@@ -350,6 +351,7 @@ private fun SettingsSectionTab(
 private fun PlaybackSection(
     state: DesktopAppState,
     settings: AppSettings,
+    allLines: List<ApiLine>,
     speedState: SpeedTestState,
     followState: FollowState,
 ) {
@@ -441,12 +443,17 @@ private fun PlaybackSection(
             Spacer(Modifier.height(14.dp))
             ToggleRow(
                 title = "默认使用最快线路",
-                description = "测速完成后自动把首页数据源切到最快的一条",
+                description = "影片内测速完成后自动切到最快的播放源（可在详情页按剧覆盖）",
                 checked = settings.preferFastestLine,
                 onChange = { enabled -> state.saveSettings { it.copy(preferFastestLine = enabled) } },
             )
             Spacer(Modifier.height(16.dp))
-            SpeedSummary(speedState, onTest = { state.runLineSpeedTest() }, onApply = { state.applyFastestLine() })
+            SpeedSummary(
+                speedState = speedState,
+                lineName = { id -> allLines.firstOrNull { it.id == id }?.name ?: id },
+                onTest = { state.runLineSpeedTest() },
+                onApply = { state.applyFastestLine() },
+            )
         }
     }
 
@@ -517,7 +524,19 @@ private fun NetworkSection(
                 color = AppColors.colors.textTertiary,
             )
             if (ProxyMode.fromStorageKey(settings.proxyMode) == ProxyMode.Custom) {
+                // NetworkProxy 在自定义地址无效时会静默退回直连（core/data/NetworkProxy.kt），
+                // 这里必须把已保存配置的真实效果说出来，避免用户以为代理生效了。
+                if (settings.proxyHost.isBlank() || settings.proxyPort !in 1..65535) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "当前保存的代理地址无效，网络请求实际按直连处理",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AppColors.colors.warning,
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
+                val portValue = proxyPort.trim().toIntOrNull()
+                val inputValid = proxyHost.isNotBlank() && portValue != null && portValue in 1..65535
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                     LabeledTextField(
                         label = "代理主机",
@@ -533,8 +552,8 @@ private fun NetworkSection(
                     LabeledTextField(
                         label = "端口",
                         value = proxyPort,
-                        onChange = {
-                            onProxyPortChange(it)
+                        onChange = { raw ->
+                            onProxyPortChange(raw.filter { it.isDigit() }.take(5))
                             if (proxyStatus != SaveStatus.Saving) proxyStatus = SaveStatus.Idle
                         },
                         placeholder = "7890",
@@ -543,24 +562,30 @@ private fun NetworkSection(
                     Spacer(Modifier.width(10.dp))
                     PrimaryButton(
                         text = "保存",
-                        enabled = proxyStatus != SaveStatus.Saving,
+                        enabled = proxyStatus != SaveStatus.Saving && inputValid,
                         onClick = {
                             val host = proxyHost.trim()
-                            val port = proxyPort.toIntOrNull() ?: 7890
-                            proxyStatus = SaveStatus.Saving
-                            state.saveSettings { it.copy(proxyHost = host, proxyPort = port) }
-                            scope.launch {
-                                proxyStatus = if (proxySettingsPersisted(state, host, port)) {
-                                    SaveStatus.Saved
-                                } else {
-                                    SaveStatus.Failed
+                            val port = portValue
+                            if (host.isNotBlank() && port != null && port in 1..65535) {
+                                proxyStatus = SaveStatus.Saving
+                                state.saveSettings { it.copy(proxyHost = host, proxyPort = port) }
+                                scope.launch {
+                                    proxyStatus = if (proxySettingsPersisted(state, host, port)) {
+                                        SaveStatus.Saved
+                                    } else {
+                                        SaveStatus.Failed
+                                    }
                                 }
                             }
                         },
                     )
                 }
                 Spacer(Modifier.height(8.dp))
-                SaveStatusHint(proxyStatus, idle = "修改主机或端口后点击保存，立即生效")
+                SaveStatusHint(
+                    status = proxyStatus,
+                    idle = "修改主机或端口后点击保存，立即生效",
+                    error = if (!inputValid) "请填写代理主机和 1-65535 之间的端口" else null,
+                )
             }
         }
     }
@@ -580,8 +605,9 @@ private fun NetworkSection(
                 )
                 Spacer(Modifier.width(10.dp))
                 PrimaryButton("保存") {
-                    state.savePlatformLiveServiceUrl(serviceUrl)
-                    serviceStatus = if (state.platformLiveServiceUrl == serviceUrl.trim()) {
+                    val normalized = serviceUrl.trim()
+                    state.savePlatformLiveServiceUrl(normalized)
+                    serviceStatus = if (state.platformLiveServiceUrl == normalized) {
                         SaveStatus.Saved
                     } else {
                         SaveStatus.Failed
@@ -606,7 +632,7 @@ private fun StorageSection(state: DesktopAppState, settings: AppSettings) {
         Column(Modifier.fillMaxWidth()) {
             StepperRow(
                 title = "图片缓存上限",
-                description = "海报缩略图磁盘缓存，超出后自动回收",
+                description = "海报缩略图的磁盘缓存上限，修改后下次启动生效",
                 value = settings.imageCacheMaxMb,
                 range = 64..2048,
                 step = 64,
@@ -614,14 +640,10 @@ private fun StorageSection(state: DesktopAppState, settings: AppSettings) {
                 onChange = { mb -> state.saveSettings { it.copy(imageCacheMaxMb = mb) } },
             )
             Spacer(Modifier.height(14.dp))
-            StepperRow(
-                title = "播放缓冲",
-                description = "mpv 的解复用缓冲大小，网络差时调大可减少卡顿",
-                value = settings.playerBufferMb,
-                range = 8..256,
-                step = 8,
-                suffix = "MB",
-                onChange = { mb -> state.saveSettings { it.copy(playerBufferMb = mb) } },
+            Text(
+                text = "播放缓冲由 libmpv 根据网络状况自动管理，无需手动调整。",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.colors.textTertiary,
             )
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -703,22 +725,30 @@ private suspend fun proxySettingsPersisted(state: DesktopAppState, host: String,
 }
 
 @Composable
-private fun SaveStatusHint(status: SaveStatus, idle: String, modifier: Modifier = Modifier) {
-    val text = when (status) {
-        SaveStatus.Idle -> idle
-        SaveStatus.Saving -> "正在保存…"
-        SaveStatus.Saved -> "已保存"
-        SaveStatus.Failed -> "保存失败，请重试"
+private fun SaveStatusHint(
+    status: SaveStatus,
+    idle: String,
+    modifier: Modifier = Modifier,
+    error: String? = null,
+) {
+    val invalid = status == SaveStatus.Idle && error != null
+    val text = when {
+        invalid -> error.orEmpty()
+        status == SaveStatus.Idle -> idle
+        status == SaveStatus.Saving -> "正在保存…"
+        status == SaveStatus.Saved -> "已保存"
+        else -> "保存失败，请重试"
     }
     if (text.isBlank()) return
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium,
-        color = when (status) {
-            SaveStatus.Idle -> AppColors.colors.textTertiary
-            SaveStatus.Saving -> AppColors.colors.textSecondary
-            SaveStatus.Saved -> AppColors.colors.accent
-            SaveStatus.Failed -> AppColors.colors.danger
+        color = when {
+            invalid -> AppColors.colors.danger
+            status == SaveStatus.Idle -> AppColors.colors.textTertiary
+            status == SaveStatus.Saving -> AppColors.colors.textSecondary
+            status == SaveStatus.Saved -> AppColors.colors.accent
+            else -> AppColors.colors.danger
         },
         modifier = modifier,
     )
@@ -785,6 +815,8 @@ private fun SourcePickerOverlay(
     onPick: (ApiLine) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
     val filtered = remember(query, lines) {
         val keyword = query.trim()
         if (keyword.isEmpty()) lines else lines.filter {
@@ -807,6 +839,14 @@ private fun SourcePickerOverlay(
                 .clip(RoundedCornerShape(16.dp))
                 .background(AppColors.colors.surface)
                 .border(1.dp, AppColors.colors.borderStrong, RoundedCornerShape(16.dp))
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                        onDismiss()
+                        true
+                    } else {
+                        false
+                    }
+                }
                 .clickable(interactionSource = inside, indication = null) {}
                 .padding(20.dp),
         ) {
@@ -831,6 +871,7 @@ private fun SourcePickerOverlay(
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = AppColors.colors.textPrimary),
                 cursorBrush = SolidColor(AppColors.colors.accent),
                 modifier = Modifier
+                    .focusRequester(searchFocus)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
                     .background(AppColors.colors.surfaceRaised)
@@ -1048,11 +1089,17 @@ private fun exportLogs(state: DesktopAppState, logState: LogState) {
 }
 
 @Composable
-private fun SpeedSummary(speedState: SpeedTestState, onTest: () -> Unit, onApply: () -> Unit) {
+private fun SpeedSummary(
+    speedState: SpeedTestState,
+    lineName: (String) -> String,
+    onTest: () -> Unit,
+    onApply: () -> Unit,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             text = if (speedState.lastRunAtMs > 0) {
-                "上次测速：${AppLog.formatTime(speedState.lastRunAtMs)} · 最快：${speedState.fastestLineId() ?: "—"}"
+                val fastest = speedState.fastestLineId()?.let(lineName) ?: "—"
+                "上次测速：${AppLog.formatTime(speedState.lastRunAtMs)} · 最快：$fastest"
             } else {
                 "还没有测速结果"
             },
@@ -1196,13 +1243,19 @@ private fun LabeledTextField(
 
 @Composable
 private fun TextField(value: String, onChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
     Box(
         modifier
             .fillMaxWidth()
             .height(42.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(AppColors.colors.surface)
-            .border(1.dp, AppColors.colors.border, RoundedCornerShape(8.dp))
+            .border(
+                1.dp,
+                if (focused) AppColors.colors.accent.copy(alpha = 0.65f) else AppColors.colors.border,
+                RoundedCornerShape(8.dp),
+            )
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -1212,68 +1265,11 @@ private fun TextField(value: String, onChange: (String) -> Unit, placeholder: St
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = AppColors.colors.textPrimary),
             cursorBrush = SolidColor(AppColors.colors.accent),
+            interactionSource = interaction,
             modifier = Modifier.fillMaxWidth(),
         )
         if (value.isEmpty()) {
             Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = AppColors.colors.textTertiary)
-        }
-    }
-}
-
-@Composable
-private fun LineOption(
-    line: ApiLine,
-    selected: Boolean,
-    speed: String?,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                when {
-                    selected -> AppColors.colors.accentSoft
-                    hovered -> AppColors.colors.surfaceHover
-                    else -> AppColors.colors.surfaceRaised
-                },
-            )
-            .border(
-                1.dp,
-                if (selected) AppColors.colors.accent.copy(alpha = 0.5f) else AppColors.colors.border,
-                RoundedCornerShape(8.dp),
-            )
-            .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = line.name,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) AppColors.colors.accent else AppColors.colors.textPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = line.baseUrls.firstOrNull().orEmpty().removePrefix("https://").removePrefix("http://").trimEnd('/'),
-                style = MaterialTheme.typography.labelMedium,
-                color = AppColors.colors.textTertiary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (!speed.isNullOrBlank()) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = speed,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (speed == "失败") AppColors.colors.danger else AppColors.colors.accent,
-            )
         }
     }
 }

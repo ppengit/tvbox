@@ -30,16 +30,22 @@ class SkipMarksRepository(private val store: KeyValueStore) {
         explicitNulls = false
     }
 
+    @Synchronized
     fun load(): List<SkipMarks> {
         val raw = store.getString(KEY, null).orEmpty()
         if (raw.isBlank()) return emptyList()
-        return runCatching { json.decodeFromString<List<SkipMarks>>(raw) }.getOrDefault(emptyList())
+        val decoded = runCatching { json.decodeFromString<List<SkipMarks>>(raw) }.getOrNull()
+        if (decoded == null) store.backupCorruptValue(KEY, raw)
+        return decoded ?: emptyList()
     }
 
+    // load + persist 是读改写，必须整体串行，否则播放器自动记录和详情页手动修改会互相覆盖。
+    @Synchronized
     fun save(marks: SkipMarks) {
         persist(load().filterNot { it.key == marks.key } + marks)
     }
 
+    @Synchronized
     fun remove(apiLineId: String, movieId: Int) {
         persist(load().filterNot { it.apiLineId == apiLineId && it.movieId == movieId })
     }

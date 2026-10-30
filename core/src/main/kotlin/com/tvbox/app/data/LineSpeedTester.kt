@@ -2,11 +2,18 @@ package com.tvbox.app.data
 
 import com.tvbox.app.domain.ApiLine
 import com.tvbox.app.domain.PlaySource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -59,27 +66,41 @@ class LineSpeedTester(
     ).build(),
 ) {
 
-    suspend fun measureLines(lines: List<ApiLine>, parallel: Int = 4): List<SpeedResult> = withContext(Dispatchers.IO) {
+    suspend fun measureLines(lines: List<ApiLine>, parallel: Int = DEFAULT_PARALLEL): List<SpeedResult> = withContext(Dispatchers.IO) {
+        val semaphore = Semaphore(parallel.coerceAtLeast(1))
         coroutineScope {
             lines.map { line ->
-                async { measureLine(line) }
+                async { semaphore.withPermit { measureLine(line) } }
             }.awaitAll()
         }
     }
 
     suspend fun measureLine(line: ApiLine): SpeedResult = withContext(Dispatchers.IO) {
-        val baseUrl = line.baseUrls.firstOrNull().orEmpty()
-        if (baseUrl.isBlank()) {
+        val baseUrls = line.baseUrls.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (baseUrls.isEmpty()) {
             return@withContext SpeedResult(line.id, line.name, ok = false, error = "线路地址为空")
         }
-        val url = if (baseUrl.contains("?")) "$baseUrl&ac=detail&pg=1" else "${baseUrl}?ac=detail&pg=1"
-        val result = probe(url, line.id, line.name, maxBytes = PROBE_BYTES)
+        var lastResult: SpeedResult? = null
+        for (baseUrl in baseUrls) {
+            val url = if (baseUrl.contains("?")) "$baseUrl&ac=detail&pg=1" else "$baseUrl?ac=detail&pg=1"
+            val result = probe(url, line.id, line.name, maxBytes = PROBE_BYTES)
+            if (result.ok) {
+                logLineResult(line.name, result)
+                return@withContext result
+            }
+            lastResult = result
+        }
+        val result = lastResult ?: SpeedResult(line.id, line.name, ok = false, error = "线路地址为空")
+        logLineResult(line.name, result)
+        result
+    }
+
+    private fun logLineResult(lineName: String, result: SpeedResult) {
         AppLog.info(
             "Speed",
-            "线路 ${line.name} 测速 ${result.formatSpeed()}（${result.bytes} 字节 / ${result.elapsedMs}ms）" +
+            "线路 $lineName 测速 ${result.formatSpeed()}（${result.bytes} 字节 / ${result.elapsedMs}ms）" +
                 (result.error?.let { " 错误：$it" } ?: ""),
         )
-        result
     }
 
     suspend fun measureSource(source: PlaySource, index: Int): SpeedResult = withContext(Dispatchers.IO) {
@@ -99,27 +120,27 @@ class LineSpeedTester(
         result
     }
 
-    suspend fun measureSources(sources: List<PlaySource>): List<SpeedResult> = withContext(Dispatchers.IO) {
+    suspend fun measureSources(sources: List<PlaySource>, parallel: Int = DEFAULT_PARALLEL): List<SpeedResult> = withContext(Dispatchers.IO) {
+        val semaphore = Semaphore(parallel.coerceAtLeast(1))
         coroutineScope {
             sources.mapIndexed { index, source ->
-                async { measureSource(source, index) }
+                async { semaphore.withPermit { measureSource(source, index) } }
             }.awaitAll()
         }
     }
 
-    private fun probePlaylist(url: String, id: String, name: String): SpeedResult {
-        val playlist = runCatching { fetch(url, PROBE_BYTES) }
-            .getOrElse { error ->
-                return SpeedResult(id, name, ok = false, error = error.message ?: "请求失败")
-            }
-        val firstSegment = runCatching {
-            playlist.text.lineSequence()
-                .map { it.trim() }
-                .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
-                ?.let { segment ->
-                    if (segment.startsWith("http")) segment else url.substringBeforeLast('/') + "/" + segment
-                }
-        }.getOrNull()
+    private suspend fun probePlaylist(url: String, id: String, name: String): SpeedResult {
+        val playlist = try {
+            fetch(url, PROBE_BYTES)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            return SpeedResult(id, name, ok = false, error = error.message ?: "请求失败")
+        }
+        val firstSegment = playlist.text.lineSequence()
+            .map { it.trim().removePrefix("\uFEFF") }
+            .firstOrNull { it.isNotBlank() && !it.startsWith("#") }
+            ?.let { segment -> resolvePlaylistUri(url, segment) }
         if (firstSegment.isNullOrBlank()) {
             return SpeedResult(
                 targetId = id,
@@ -131,10 +152,13 @@ class LineSpeedTester(
                 error = if (playlist.bytes > 0) null else "分片列表为空",
             )
         }
-        val segment = runCatching { fetch(firstSegment, PROBE_BYTES) }
-            .getOrElse { error ->
-                return SpeedResult(id, name, ok = false, error = error.message ?: "分片请求失败")
-            }
+        val segment = try {
+            fetch(firstSegment, PROBE_BYTES)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            return SpeedResult(id, name, ok = false, error = error.message ?: "分片请求失败")
+        }
         return SpeedResult(
             targetId = id,
             targetName = name,
@@ -146,54 +170,82 @@ class LineSpeedTester(
         )
     }
 
-    private fun probe(url: String, id: String, name: String, maxBytes: Long): SpeedResult =
-        runCatching { fetch(url, maxBytes) }
-            .fold(
-                onSuccess = {
-                    SpeedResult(
-                        id, name, ok = it.bytes > 0, bytes = it.bytes,
-                        elapsedMs = it.elapsedMs, latencyMs = it.latencyMs,
-                    )
-                },
-                onFailure = { SpeedResult(id, name, ok = false, error = it.message ?: "请求失败") },
+    /**
+     * m3u8 里的分片可能是绝对地址、根路径、相对路径或协议相对地址。
+     * 用 HttpUrl.resolve 统一处理，避免手工拼出 `//` 或丢路径。
+     */
+    private fun resolvePlaylistUri(playlistUrl: String, segment: String): String {
+        if (segment.startsWith("http://", ignoreCase = true) ||
+            segment.startsWith("https://", ignoreCase = true)
+        ) {
+            return segment
+        }
+        val base = playlistUrl.toHttpUrlOrNull() ?: return segment
+        return runCatching { base.resolve(segment)?.toString() }.getOrNull() ?: segment
+    }
+
+    private suspend fun probe(url: String, id: String, name: String, maxBytes: Long): SpeedResult =
+        try {
+            val probe = fetch(url, maxBytes)
+            SpeedResult(
+                id, name, ok = probe.bytes > 0, bytes = probe.bytes,
+                elapsedMs = probe.elapsedMs, latencyMs = probe.latencyMs,
             )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            SpeedResult(id, name, ok = false, error = error.message ?: "请求失败")
+        }
 
     private data class Probe(val bytes: Long, val elapsedMs: Long, val latencyMs: Long, val text: String)
 
-    private fun fetch(url: String, maxBytes: Long): Probe {
+    private suspend fun fetch(url: String, maxBytes: Long): Probe = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(url)
             .header("Range", "bytes=0-${maxBytes - 1}")
             .header("User-Agent", SPEED_TEST_UA)
             .build()
-        val startedAt = System.nanoTime()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful && response.code != 206) {
-                error("HTTP ${response.code}")
-            }
-            val body = response.body ?: error("响应为空")
-            val buffer = ByteArray(16 * 1024)
-            var total = 0L
-            val textBuilder = StringBuilder()
-            body.byteStream().use { stream ->
-                while (total < maxBytes) {
-                    val read = stream.read(buffer)
-                    if (read <= 0) break
-                    total += read
-                    if (textBuilder.length < 4096) {
-                        textBuilder.append(String(buffer, 0, minOf(read, 4096 - textBuilder.length)))
+        val call = client.newCall(request)
+        // execute() 是阻塞调用，协程取消不会自动断开 socket；取消时主动 cancel 请求。
+        val cancellationHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+            if (cause is CancellationException) call.cancel()
+        }
+        try {
+            val startedAt = System.nanoTime()
+            call.execute().use { response ->
+                if (!response.isSuccessful && response.code != 206) {
+                    error("HTTP ${response.code}")
+                }
+                val body = response.body
+                val buffer = ByteArray(16 * 1024)
+                var total = 0L
+                val textBuilder = StringBuilder()
+                body.byteStream().use { stream ->
+                    while (total < maxBytes) {
+                        currentCoroutineContext().ensureActive()
+                        val remaining = (maxBytes - total).coerceAtMost(buffer.size.toLong()).toInt()
+                        val read = stream.read(buffer, 0, remaining)
+                        if (read <= 0) break
+                        total += read
+                        if (textBuilder.length < 4096) {
+                            val append = minOf(read, 4096 - textBuilder.length)
+                            textBuilder.append(String(buffer, 0, append, Charsets.UTF_8))
+                        }
                     }
                 }
+                val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
+                // OkHttp 的收发时间戳覆盖 DNS + 连接 + 首包，正好是用户感知的「点开要等多久」。
+                val latency = (response.receivedResponseAtMillis - response.sentRequestAtMillis)
+                    .coerceIn(1L, elapsed)
+                Probe(total, elapsed, latency, textBuilder.toString())
             }
-            val elapsed = ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(1L)
-            // OkHttp 的收发时间戳覆盖 DNS + 连接 + 首包，正好是用户感知的「点开要等多久」。
-            val latency = (response.receivedResponseAtMillis - response.sentRequestAtMillis)
-                .coerceIn(1L, elapsed)
-            return Probe(total, elapsed, latency, textBuilder.toString())
+        } finally {
+            cancellationHandle?.dispose()
         }
     }
 
     private companion object {
+        const val DEFAULT_PARALLEL = 4
         const val PROBE_BYTES = 1_500_000L
         const val SPEED_TEST_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +

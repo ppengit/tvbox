@@ -37,6 +37,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.tvbox.desktop.state.CategoryFilters
@@ -168,14 +169,14 @@ private fun CategorySelector(state: DesktopAppState, category: CategoryState) {
                     text = "清除",
                     style = MaterialTheme.typography.labelMedium,
                     color = AppColors.colors.textSecondary,
-                    modifier = Modifier.clickable { state.clearCategoryFilters() }.padding(8.dp),
+                    modifier = Modifier.clickable(role = Role.Button) { state.clearCategoryFilters() }.padding(8.dp),
                 )
             }
             Text(
                 text = if (expanded) "收起 ︿" else "展开 ﹀",
                 style = MaterialTheme.typography.labelMedium,
                 color = AppColors.colors.textSecondary,
-                modifier = Modifier.clickable { expanded = !expanded }.padding(8.dp),
+                modifier = Modifier.clickable(role = Role.Button) { expanded = !expanded }.padding(8.dp),
             )
         }
         if (expanded) {

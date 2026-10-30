@@ -33,8 +33,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -229,7 +231,10 @@ fun MediaProgressBar(
             .fillMaxWidth()
             .height(4.dp)
             .clip(RoundedCornerShape(DesktopShapes.pill))
-            .background(AppColors.colors.surfaceActive),
+            .background(AppColors.colors.surfaceActive)
+            .semantics {
+                progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
+            },
     ) {
         if (fraction > 0f) {
             Box(

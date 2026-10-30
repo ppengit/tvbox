@@ -49,6 +49,30 @@ fun DesktopAppState.clearSkipMarks(movie: Movie) {
     notify("已清除本剧的片头片尾标记")
 }
 
+/** 片头、片尾各自可单独清除；两项都清空后直接删掉这条记录。 */
+fun DesktopAppState.clearIntroMark(movie: Movie) {
+    val current = skipMarksFor(movie) ?: return
+    if (!current.hasIntro) return
+    persistPartial(current.copy(introEndMs = 0L), "已清除片头标记")
+}
+
+fun DesktopAppState.clearOutroMark(movie: Movie) {
+    val current = skipMarksFor(movie) ?: return
+    if (!current.hasOutro) return
+    persistPartial(current.copy(outroStartMs = 0L), "已清除片尾标记")
+}
+
+private fun DesktopAppState.persistPartial(marks: SkipMarks, message: String) {
+    if (marks.hasIntro || marks.hasOutro) {
+        runCatching { skipMarksRepository.save(marks) }
+        updateSkipMarks { it + (marks.key to marks) }
+    } else {
+        runCatching { skipMarksRepository.remove(marks.apiLineId, marks.movieId) }
+        updateSkipMarks { it - marks.key }
+    }
+    notify(message)
+}
+
 fun formatSkipTime(ms: Long): String {
     if (ms <= 0L) return "未设置"
     val totalSeconds = ms / 1000

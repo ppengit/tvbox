@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -57,6 +58,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
@@ -191,6 +193,7 @@ fun PlayerScreen(
     val latestReadySinceOpen by rememberUpdatedState(readySinceOpen)
     val latestResumeProgressed by rememberUpdatedState(resumeProgressed)
     val latestPlayWhenReady by rememberUpdatedState(playState.playWhenReady)
+    val latestToggleFullscreen by rememberUpdatedState(onToggleFullscreen)
 
     fun markInteraction() {
         lastInteraction = System.currentTimeMillis()
@@ -566,6 +569,25 @@ fun PlayerScreen(
             },
     ) {
         MediampPlayerSurface(player, Modifier.fillMaxSize())
+
+        // 视频区域手势：单击暂停/继续，双击全屏/恢复。控件和弹层在更上层，
+        // 点按钮时事件会被它们消费，不会误触播放状态。
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(player) {
+                    detectTapGestures(
+                        onTap = {
+                            player.togglePlayWhenReady()
+                            markInteraction()
+                        },
+                        onDoubleTap = {
+                            latestToggleFullscreen()
+                            markInteraction()
+                        },
+                    )
+                },
+        )
 
         if (showOpeningOverlay) {
             Box(

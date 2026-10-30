@@ -63,60 +63,69 @@ fun WindowTitleBar(
         modifier = Modifier
             .fillMaxWidth()
             .height(DesktopMetrics.titleBarHeight)
-            .background(AppColors.colors.sidebar)
-            .pointerInput(Unit) {
-                var startLocation: Point? = null
-                var startPointer: Point? = null
-                var restoredDuringDrag = false
-                detectDragGestures(
-                    onDragStart = {
-                        startLocation = window.location
-                        startPointer = java.awt.MouseInfo.getPointerInfo()?.location
-                        restoredDuringDrag = false
-                    },
-                    onDragEnd = {
-                        startLocation = null
-                        startPointer = null
-                        restoredDuringDrag = false
-                    },
-                    onDragCancel = {
-                        startLocation = null
-                        startPointer = null
-                        restoredDuringDrag = false
-                    },
-                ) { change, _ ->
-                    change.consume()
-                    val pointer = java.awt.MouseInfo.getPointerInfo()?.location ?: return@detectDragGestures
-                    if (isWindowMaximized() && !restoredDuringDrag) {
-                        startLocation = onRestoreForDrag(pointer)
-                        startPointer = pointer
-                        restoredDuringDrag = true
-                    }
-                    val start = startLocation ?: return@detectDragGestures
-                    val from = startPointer ?: return@detectDragGestures
-                    val area = workAreaFor(pointer)
-                    val targetX = (start.x + pointer.x - from.x)
-                        .coerceIn(area.x - window.width + 160, area.x + area.width - 160)
-                    val targetY = (start.y + pointer.y - from.y)
-                        .coerceIn(area.y, area.y + area.height - 48)
-                    window.setLocation(targetX, targetY)
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures(onDoubleTap = { onToggleMaximize() })
-            },
+            .background(AppColors.colors.sidebar),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Spacer(Modifier.width(14.dp))
-        Box(Modifier.size(6.dp).background(AppColors.colors.accent, CircleShape))
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
-            color = AppColors.colors.textTertiary,
-        )
-        Spacer(Modifier.weight(1f))
+        // 拖动与双击最大化只绑定在标题文字区域。之前整条标题栏都能拖动，
+        // 在关闭/最大化按钮上按下时只要指针抖动几像素就会先还原窗口，
+        // 表现为「第一次点关闭只是变小窗，第二次才真正关闭」。
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .pointerInput(Unit) {
+                    var startLocation: Point? = null
+                    var startPointer: Point? = null
+                    var restoredDuringDrag = false
+                    detectDragGestures(
+                        onDragStart = {
+                            startLocation = window.location
+                            startPointer = java.awt.MouseInfo.getPointerInfo()?.location
+                            restoredDuringDrag = false
+                        },
+                        onDragEnd = {
+                            startLocation = null
+                            startPointer = null
+                            restoredDuringDrag = false
+                        },
+                        onDragCancel = {
+                            startLocation = null
+                            startPointer = null
+                            restoredDuringDrag = false
+                        },
+                    ) { change, _ ->
+                        change.consume()
+                        val pointer = java.awt.MouseInfo.getPointerInfo()?.location ?: return@detectDragGestures
+                        if (isWindowMaximized() && !restoredDuringDrag) {
+                            startLocation = onRestoreForDrag(pointer)
+                            startPointer = pointer
+                            restoredDuringDrag = true
+                        }
+                        val start = startLocation ?: return@detectDragGestures
+                        val from = startPointer ?: return@detectDragGestures
+                        val area = workAreaFor(pointer)
+                        val targetX = (start.x + pointer.x - from.x)
+                            .coerceIn(area.x - window.width + 160, area.x + area.width - 160)
+                        val targetY = (start.y + pointer.y - from.y)
+                            .coerceIn(area.y, area.y + area.height - 48)
+                        window.setLocation(targetX, targetY)
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(onDoubleTap = { onToggleMaximize() })
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.width(14.dp))
+            Box(Modifier.size(6.dp).background(AppColors.colors.accent, CircleShape))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = AppColors.colors.textTertiary,
+            )
+        }
         WindowButton(label = "最小化", onClick = onMinimize) { tint ->
             Canvas(Modifier.size(10.dp)) {
                 drawLine(tint, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 1.2.dp.toPx())

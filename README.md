@@ -23,12 +23,14 @@ TVBox 是一个面向 Android TV / 电视盒子的影视播放应用，使用 Ko
 构建与打包（需要 JDK 17）：
 
 ```powershell
-.\gradlew.bat :desktop:desktopTest        # 桌面单测
-.\gradlew.bat :desktop:run                # 直接运行
-.\gradlew.bat :desktop:packageMsi         # 生成 MSI 安装包
+.\gradlew.bat :desktop:desktopTest           # 桌面单测
+.\gradlew.bat :desktop:run                   # 直接运行
+.\gradlew.bat :desktop:createDistributable   # 生成免安装便携版
 ```
 
-MSI 输出在 `desktop/build/compose/binaries/main/msi/`，安装包版本由 `desktop/build.gradle.kts` 中的 `desktopVersion` 统一提供，侧栏与设置页“关于”读取同一份生成值。
+便携版输出在 `desktop/build/compose/binaries/main/app/XiaoJi/`，整个目录拷到任意位置后运行 `XiaoJi.exe` 即可。若在 `XiaoJi.exe` 同目录放一个空的 `portable.flag`，配置、缓存和日志会写到旁边的 `data/` 目录，整包搬走不会丢数据；没有该文件时仍使用 `%APPDATA%\XiaoJiYingShi`。
+
+版本号由 `desktop/build.gradle.kts` 中的 `desktopVersion` 统一提供，侧栏与设置页“关于”读取同一份生成值。
 
 ## 界面预览
 

@@ -1036,7 +1036,7 @@ private fun SourceMenu(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 测完速按延迟排序：成功的在前（按 ms 升序），失败次之，未测速保持原顺序垫底。
+    // 与详情页保持同一排序：成功的在前（按 ms 升序），延迟相同看带宽，失败次之，未测速垫底。
     val ordered = remember(options, speeds) {
         options.sortedWith(
             compareBy(
@@ -1049,6 +1049,8 @@ private fun SourceMenu(
                     }
                 },
                 { option -> speeds[option.index]?.latencyMs?.takeIf { it > 0L } ?: Long.MAX_VALUE },
+                { option -> -(speeds[option.index]?.kbps ?: 0.0) },
+                { option -> option.index },
             ),
         )
     }

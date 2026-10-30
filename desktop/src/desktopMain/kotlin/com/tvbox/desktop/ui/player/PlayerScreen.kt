@@ -165,6 +165,14 @@ fun PlayerScreen(
     var outroCountdown by remember(playerState.currentUrl) { mutableIntStateOf(0) }
     var readySinceOpen by remember(playerState.currentUrl) { mutableStateOf(false) }
     var openingSeconds by remember(playerState.currentUrl) { mutableIntStateOf(0) }
+    // mediamp 在打开媒体时就把播放位置直接设成续播目标，Ready 时位置已经是「上次位置」，
+    // 所以不能用「位置 > 0」判断是否真的出画面；要等位置从目标继续向前推进。
+    var resumeProgressed by remember(playerState.currentUrl) {
+        mutableStateOf(playerState.startPositionMs <= 0L)
+    }
+    var resumeBaselineMs by remember(playerState.currentUrl) {
+        mutableLongStateOf(playerState.startPositionMs)
+    }
     var seekHint by remember { mutableStateOf<SeekHint?>(null) }
     var seekAccumulatedMs by remember { mutableLongStateOf(0L) }
     var seekLastAtMs by remember { mutableLongStateOf(0L) }
@@ -177,10 +185,12 @@ fun PlayerScreen(
         positionMs >= outroStartMs
     // 续播时 mpv 会把媒体定位到上次位置：Ready 之后到真正出画面前还会黑屏一段时间，
     // 这段时间必须继续显示加载层，否则用户看到的就是「黑屏且没有任何反应」。
-    val resumeSeeking = readySinceOpen && !playerState.isLive && pendingStart > 0L && positionMs <= 0L
+    val resumeSeeking = readySinceOpen && !playerState.isLive && pendingStart > 0L &&
+        !resumeProgressed && playState.playWhenReady
     val showOpeningOverlay = errorMessage == null && (!readySinceOpen || resumeSeeking || playState.isBuffering)
     val latestReadySinceOpen by rememberUpdatedState(readySinceOpen)
-    val latestPositionMs by rememberUpdatedState(positionMs)
+    val latestResumeProgressed by rememberUpdatedState(resumeProgressed)
+    val latestPlayWhenReady by rememberUpdatedState(playState.playWhenReady)
 
     fun markInteraction() {
         lastInteraction = System.currentTimeMillis()
@@ -321,9 +331,15 @@ fun PlayerScreen(
     }
 
     // 缓冲看护：起播或卡缓冲超过阈值视为线路不可用，按设置决定是否自动换源。
-    LaunchedEffect(playState.isBuffering, playState.mediaStatus, readySinceOpen, positionMs) {
-        // 续播定位也算「还没出画面」：Ready 之后停在 0 秒说明 mpv 还在 seek。
-        val resumeSeeking = readySinceOpen && pendingStart > 0L && positionMs <= 0L
+    LaunchedEffect(
+        playState.isBuffering,
+        playState.mediaStatus,
+        playState.playWhenReady,
+        readySinceOpen,
+        resumeProgressed,
+    ) {
+        // 续播定位也算「还没出画面」：Ready 之后位置停在目标点说明 mpv 还在 seek。
+        val resumeSeeking = readySinceOpen && pendingStart > 0L && !resumeProgressed
         val buffering = playState.isBuffering || playState.mediaStatus == MediaStatus.Opening || resumeSeeking
         bufferingStartedAt = when {
             !buffering -> 0L
@@ -337,9 +353,14 @@ fun PlayerScreen(
             val timeoutSeconds = settings.bufferingTimeoutSeconds
             val startedAt = bufferingStartedAt
             if (playerState.isLive || timeoutSeconds <= 0 || startedAt == 0L) continue
+            // 暂停时不计时也不换线：用户主动暂停不代表线路坏了。
+            if (!latestPlayWhenReady) {
+                bufferingStartedAt = 0L
+                continue
+            }
             if (System.currentTimeMillis() - startedAt < timeoutSeconds * 1000L) continue
             bufferingStartedAt = 0L
-            val resumeStalled = latestReadySinceOpen && pendingStart > 0L && latestPositionMs <= 0L
+            val resumeStalled = latestReadySinceOpen && pendingStart > 0L && !latestResumeProgressed
             val reason = if (resumeStalled) {
                 "续播定位超过 $timeoutSeconds 秒"
             } else {
@@ -400,13 +421,28 @@ fun PlayerScreen(
         if (seekHint?.nonce == hint.nonce) seekHint = null
     }
 
+    // 续播定位完成：播放位置从目标点继续向前推进，才说明画面真的开始播放了。
+    // mpv 在 seek 期间可能先报 0 或定位关键帧，因此位置明显回退时把基准跟着下调。
+    LaunchedEffect(positionMs, readySinceOpen, playerState.currentUrl) {
+        if (!readySinceOpen || pendingStart <= 0L || resumeProgressed) return@LaunchedEffect
+        when {
+            positionMs + RESUME_REWIND_TOLERANCE_MS < resumeBaselineMs -> resumeBaselineMs = positionMs
+            positionMs >= resumeBaselineMs + RESUME_PROGRESS_MS -> resumeProgressed = true
+        }
+    }
+
     // 起播计时：用于在加载层里显示等待秒数，超过缓冲阈值时明确提示会自动换源。
     // 续播定位期间继续计时，避免 Ready 之后 seek 很久却一直停在「0 秒」。
     LaunchedEffect(playerState.currentUrl) {
         openingSeconds = 0
-        while (!latestReadySinceOpen || (pendingStart > 0L && latestPositionMs <= 0L)) {
+        while (!latestReadySinceOpen || (pendingStart > 0L && !latestResumeProgressed)) {
             delay(1_000)
-            if (!latestReadySinceOpen || (pendingStart > 0L && latestPositionMs <= 0L)) {
+            // 用户暂停时不累计等待时间，恢复播放后重新从 0 开始提示。
+            if (!latestPlayWhenReady) {
+                openingSeconds = 0
+                continue
+            }
+            if (!latestReadySinceOpen || (pendingStart > 0L && !latestResumeProgressed)) {
                 openingSeconds++
             }
         }
@@ -1458,3 +1494,9 @@ private fun formatTime(ms: Long): String {
 
 private fun trimSpeed(speed: Float): String =
     if (speed == speed.toInt().toFloat()) speed.toInt().toString() else speed.toString()
+
+/** 续播后播放位置至少前进这么多，才认为定位完成、画面已开始播放。 */
+private const val RESUME_PROGRESS_MS = 400L
+
+/** mpv 定位可能落在目标前的关键帧上，回退在这个范围内仍以原目标为基准。 */
+private const val RESUME_REWIND_TOLERANCE_MS = 500L

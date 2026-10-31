@@ -63,4 +63,6 @@ internal object AppStorageNames {
     const val PLAYBACK_HEALTH = "playback_health"
     const val PLATFORM_LIVE_FAVORITES = "platform_live_favorites"
     const val DOUBAN_HOT_CACHE = "douban_hot_cache"
+    const val SPEED_CACHE = "speed_cache"
+    const val SKIP_MARKS = "skip_marks"
 }

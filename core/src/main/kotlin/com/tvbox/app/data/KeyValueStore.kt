@@ -24,3 +24,14 @@ interface KeyValueStore {
         fun clear(): Editor
     }
 }
+
+/**
+ * JSON 值损坏时先留一份原文，下一次保存不会把用户的旧数据彻底覆盖。
+ * 反复读取同一份损坏数据时只备份一次，避免每次启动都写盘。
+ */
+fun KeyValueStore.backupCorruptValue(key: String, raw: String) {
+    if (raw.isBlank()) return
+    val backupKey = "$key.corrupt"
+    if (getString(backupKey) == raw) return
+    edit { putString(backupKey, raw) }
+}

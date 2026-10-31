@@ -1,7 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-val desktopVersion = "1.3.13"
+val desktopVersion = "1.4.1"
 
 val generateDesktopVersion by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/desktopVersion")

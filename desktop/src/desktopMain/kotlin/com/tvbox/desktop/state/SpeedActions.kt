@@ -3,9 +3,9 @@ package com.tvbox.desktop.state
 import com.tvbox.app.data.AppLog
 import com.tvbox.app.data.SpeedResult
 import com.tvbox.app.domain.Movie
-import com.tvbox.desktop.data.CachedSpeed
-import com.tvbox.desktop.data.movieSpeedCacheKey
-import com.tvbox.desktop.data.speedCacheKey
+import com.tvbox.app.data.CachedSpeed
+import com.tvbox.app.data.movieSpeedCacheKey
+import com.tvbox.app.data.speedCacheKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive

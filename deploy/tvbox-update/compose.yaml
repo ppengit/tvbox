@@ -1,0 +1,51 @@
+services:
+  # 只做静态文件：最新 APK 和 update.json。目录由 publish-update.ps1 维护，
+  # 不在这里放任何源码、Token 或管理接口。
+  update:
+    image: nginx:alpine
+    container_name: tvbox-update
+    volumes:
+      - "${TVBOX_UPDATE_ROOT:-D:/Portable/TvBoxUpdate}:/usr/share/nginx/html:ro"
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - parrot-tv
+    restart: unless-stopped
+    stop_grace_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # 家宽公网 IP 变化后把 tvbox.pfac.fun 的 A 记录同步到 Cloudflare。
+  # 与 DuanJu 的 DDNS 使用同一个只读凭据文件；Cloudflare 记录保持灰云（DNS only）
+  # 和 TTL 60，客户端固定访问 https://tvbox.pfac.fun:8443（80/443 入站被封）。
+  ddns:
+    build:
+      context: ./ddns
+    image: tvbox-ddns:local
+    container_name: tvbox-ddns
+    env_file:
+      - ${CF_ENV_FILE:-D:/Portable/secrets/cf-pfac-fun.env}
+    environment:
+      CF_ZONE_ID: "3636e1ad722d831e2c4273f18b4097be"
+      CF_RECORD_NAME: "tvbox.pfac.fun"
+      CF_PROXIED: "false"
+      DDNS_INTERVAL_SECONDS: "300"
+      TZ: "Asia/Shanghai"
+    volumes:
+      - ${CF_SECRETS_DIR:-D:/Portable/secrets}:/run/secrets:ro
+    networks:
+      - parrot-tv
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  # 复用 DuanJu 已有的反向代理网络：Caddy 通过服务名 tvbox-update:80 访问本容器。
+  parrot-tv:
+    external: true
+    name: parrot-tv_default

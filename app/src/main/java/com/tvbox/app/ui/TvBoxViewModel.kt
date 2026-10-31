@@ -7,6 +7,7 @@ import com.tvbox.app.BuildConfig
 import com.tvbox.app.data.AiConfigServer
 import com.tvbox.app.data.AiRequestConfig
 import com.tvbox.app.data.AiRecommendationRepository
+import com.tvbox.app.data.CachedSpeed
 import com.tvbox.app.data.AppUpdateRepository
 import com.tvbox.app.data.DefaultAiRecommendationRepository
 import com.tvbox.app.data.DefaultMovieRepository
@@ -15,8 +16,15 @@ import com.tvbox.app.data.DefaultDoubanHotRepository
 import com.tvbox.app.data.DoubanHotRepository
 import com.tvbox.app.data.HistoryRepository
 import com.tvbox.app.data.HistoryWriteGuard
+import com.tvbox.app.data.LineSpeedTester
 import com.tvbox.app.data.LiveRepository
 import com.tvbox.app.data.MovieRepository
+import com.tvbox.app.data.SkipMarks
+import com.tvbox.app.data.SkipMarksRepository
+import com.tvbox.app.data.SpeedCacheRepository
+import com.tvbox.app.data.SpeedResult
+import com.tvbox.app.data.movieSpeedCacheKey
+import com.tvbox.app.data.speedCacheKey
 import com.tvbox.app.data.PlaybackHealthRepository
 import com.tvbox.app.data.DefaultPlatformLiveRepository
 import com.tvbox.app.data.PlatformLiveRepository
@@ -33,6 +41,7 @@ import com.tvbox.app.domain.CustomVideoApiLine
 import com.tvbox.app.domain.DoubanHotItem
 import com.tvbox.app.domain.LiveChannel
 import com.tvbox.app.domain.Movie
+import com.tvbox.app.domain.PlaySource
 import com.tvbox.app.domain.PlaybackAgent
 import com.tvbox.app.domain.PlaybackAgentDecision
 import com.tvbox.app.domain.PlaybackHealthSnapshot
@@ -87,6 +96,13 @@ enum class PlatformLiveDestination {
     Player,
 }
 
+/** 更新服务器连通性。启动检查失败时不打扰用户，只在设置页展示这个状态。 */
+enum class UpdateServerStatus {
+    Unknown,
+    Connected,
+    Unavailable,
+}
+
 data class AiRecommendationUiItem(
     val recommendation: AiRecommendationItem,
 )
@@ -124,6 +140,10 @@ data class TvBoxUiState(
     val detailError: String? = null,
     val detailCompletedSources: Int = 0,
     val detailTotalSources: Int = 0,
+    val skipMarks: Map<String, SkipMarks> = emptyMap(),
+    val detailSourceSpeeds: Map<Int, SpeedResult> = emptyMap(),
+    val detailSpeedTesting: Boolean = false,
+    val detailSpeedMeasuredAtMs: Long = 0L,
     val detailReturnScreen: TvScreen = TvScreen.Home,
     val selectedSourceIndex: Int = 0,
     val selectedEpisodeIndex: Int = 0,
@@ -167,6 +187,7 @@ data class TvBoxUiState(
     val updateExporting: Boolean = false,
     val updateExportMessage: String? = null,
     val updateError: String? = null,
+    val updateServerStatus: UpdateServerStatus = UpdateServerStatus.Unknown,
     val appSettings: AppSettings = AppSettings(),
     val playbackHealth: PlaybackHealthSnapshot = PlaybackHealthSnapshot(),
     val aiQuery: String = "",
@@ -209,6 +230,8 @@ class TvBoxViewModel(
     private val playbackHealthRepository: PlaybackHealthRepository = DefaultPlaybackHealthRepositoryPlaceholder(),
     private val historyRepository: HistoryRepository,
     private val platformLiveFavoritesRepository: PlatformLiveFavoritesRepository,
+    private val speedCacheRepository: SpeedCacheRepository? = null,
+    private val skipMarksRepository: SkipMarksRepository? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(TvBoxUiState())
     val state: StateFlow<TvBoxUiState> = _state.asStateFlow()
@@ -217,6 +240,8 @@ class TvBoxViewModel(
     private var doubanHotResolveJob: Job? = null
     private var searchJob: Job? = null
     private var detailJob: Job? = null
+    private var detailSpeedJob: Job? = null
+    private var speedTestedMovieKey: String? = null
     private var historyResumeJob: Job? = null
     private var liveJob: Job? = null
     private var platformLiveJob: Job? = null
@@ -235,6 +260,7 @@ class TvBoxViewModel(
     private var aiConfigServer: AiConfigServer? = null
     private var videoApiConfigServer: VideoApiConfigServer? = null
     private val playbackAgent = PlaybackAgent()
+    private val speedTester = LineSpeedTester()
 
     init {
         restorePendingUpdateDownload()
@@ -271,11 +297,82 @@ class TvBoxViewModel(
                 )
             }
             loadHistory()
+            loadSkipMarks()
             refreshHome()
             if (normalizedSettings.checkUpdatesOnStartup) {
                 checkForAppUpdate()
             }
         }
+    }
+
+    private fun loadSkipMarks() {
+        val repository = skipMarksRepository ?: return
+        val marks = runCatching { repository.load() }.getOrDefault(emptyList())
+        _state.update { it.copy(skipMarks = marks.associateBy { mark -> mark.key }) }
+    }
+
+    /** 把片头结束点设在当前播放位置；同一部剧的所有集共用这组标记。 */
+    fun setSkipIntroEnd(positionMs: Long): Boolean =
+        updateSkipMarks(introEndMs = positionMs.coerceAtLeast(0L))
+
+    /** 把片尾开始点设在当前播放位置。 */
+    fun setSkipOutroStart(positionMs: Long): Boolean =
+        updateSkipMarks(outroStartMs = positionMs.coerceAtLeast(0L))
+
+    fun clearSkipMarks() {
+        val movie = _state.value.detailMovie ?: return
+        val repository = skipMarksRepository ?: return
+        val key = "${movie.apiLineId}:${movie.id}"
+        runCatching { repository.remove(movie.apiLineId, movie.id) }
+        _state.update { it.copy(skipMarks = it.skipMarks - key) }
+    }
+
+    private fun updateSkipMarks(introEndMs: Long? = null, outroStartMs: Long? = null): Boolean {
+        val movie = _state.value.detailMovie ?: return false
+        val repository = skipMarksRepository ?: return false
+        val key = "${movie.apiLineId}:${movie.id}"
+        val current = _state.value.skipMarks[key]
+            ?: SkipMarks(apiLineId = movie.apiLineId, movieId = movie.id)
+        if (introEndMs != null && current.hasOutro && introEndMs >= current.outroStartMs) return false
+        if (outroStartMs != null && current.hasIntro && outroStartMs <= current.introEndMs) return false
+        val updated = current.copy(
+            introEndMs = introEndMs ?: current.introEndMs,
+            outroStartMs = outroStartMs ?: current.outroStartMs,
+        )
+        runCatching { repository.save(updated) }
+        _state.update { it.copy(skipMarks = it.skipMarks + (key to updated)) }
+        return true
+    }
+
+    fun clearSpeedCache() {
+        speedCacheRepository?.clear()
+        _state.update {
+            it.copy(detailSourceSpeeds = emptyMap(), detailSpeedMeasuredAtMs = 0L)
+        }
+    }
+
+    fun updateSpeedTestOnOpen(enabled: Boolean) {
+        val settings = _state.value.appSettings.copy(speedTestOnOpen = enabled)
+        saveSettings(settings)
+        _state.update { it.copy(appSettings = settings) }
+    }
+
+    fun updatePreferFastestLine(enabled: Boolean) {
+        val settings = _state.value.appSettings.copy(preferFastestLine = enabled)
+        saveSettings(settings)
+        _state.update { it.copy(appSettings = settings) }
+    }
+
+    fun updateAutoSkipIntro(enabled: Boolean) {
+        val settings = _state.value.appSettings.copy(autoSkipIntro = enabled)
+        saveSettings(settings)
+        _state.update { it.copy(appSettings = settings) }
+    }
+
+    fun updateAutoSkipOutro(enabled: Boolean) {
+        val settings = _state.value.appSettings.copy(autoSkipOutro = enabled)
+        saveSettings(settings)
+        _state.update { it.copy(appSettings = settings) }
     }
 
     fun refreshHome(forceRefresh: Boolean = false) {
@@ -462,9 +559,9 @@ class TvBoxViewModel(
                 .onSuccess { update ->
                     _state.update {
                         if (update == null) {
-                            it.copy(updateChecking = false)
+                            it.copy(updateChecking = false, updateServerStatus = UpdateServerStatus.Connected)
                         } else if (it.updateDownloading || it.updateDownloadedApkPath != null) {
-                            it.copy(updateChecking = false)
+                            it.copy(updateChecking = false, updateServerStatus = UpdateServerStatus.Connected)
                         } else {
                             it.copy(
                                 availableUpdate = update,
@@ -474,6 +571,7 @@ class TvBoxViewModel(
                                 updateDownloadProgress = null,
                                 updateDownloadedApkPath = null,
                                 updateError = null,
+                                updateServerStatus = UpdateServerStatus.Connected,
                             )
                         }
                     }
@@ -483,7 +581,9 @@ class TvBoxViewModel(
                         it.copy(
                             updateChecking = false,
                             updateDialogVisible = showError && it.availableUpdate != null,
+                            // 启动检查失败保持静默：不弹窗、不打扰，只在设置页标记连接异常。
                             updateError = if (showError) error.userMessage() else null,
+                            updateServerStatus = UpdateServerStatus.Unavailable,
                         )
                     }
                 }
@@ -1134,6 +1234,8 @@ class TvBoxViewModel(
         historyDetailRetry = null
         historyResumeJob?.cancel()
         detailJob?.cancel()
+        detailSpeedJob?.cancel()
+        speedTestedMovieKey = null
         val current = _state.value
         val returnScreen = when (current.screen) {
             TvScreen.AiRecommend -> TvScreen.AiRecommend
@@ -1151,6 +1253,9 @@ class TvBoxViewModel(
                 detailError = null,
                 detailCompletedSources = 0,
                 detailTotalSources = 0,
+                detailSourceSpeeds = emptyMap(),
+                detailSpeedTesting = false,
+                detailSpeedMeasuredAtMs = 0L,
                 selectedSourceIndex = 0,
                 selectedEpisodeIndex = 0,
                 playerSourceIndex = 0,
@@ -1163,6 +1268,11 @@ class TvBoxViewModel(
             try {
                 repository.getDetailProgressively(apiLineId = apiLineId, id = movieId).collect { update ->
                     receivedPrimary = true
+                    val cachedSpeeds = if (_state.value.detailMovie == null) {
+                        loadCachedSourceSpeeds(update.movie)
+                    } else {
+                        null
+                    }
                     _state.update { state ->
                         val sourceIndex = if (state.detailMovie == null) {
                             resolveBestPlaybackSourceIndex(
@@ -1183,6 +1293,8 @@ class TvBoxViewModel(
                             detailError = null,
                             detailCompletedSources = update.completedSources,
                             detailTotalSources = update.totalSources,
+                            detailSourceSpeeds = cachedSpeeds?.first ?: state.detailSourceSpeeds,
+                            detailSpeedMeasuredAtMs = cachedSpeeds?.second ?: state.detailSpeedMeasuredAtMs,
                             selectedSourceIndex = sourceIndex,
                             selectedEpisodeIndex = 0,
                             playerSourceIndex = sourceIndex,
@@ -1190,6 +1302,7 @@ class TvBoxViewModel(
                             playerStartPositionMs = 0L,
                         )
                     }
+                    maybeStartDetailSpeedTest(update.movie)
                 }
                 if (!receivedPrimary) {
                     _state.update {
@@ -1204,6 +1317,84 @@ class TvBoxViewModel(
                 }
             }
         }
+    }
+
+    /** 详情页手动测速：并发探测每条播放源，结果按稳定源标识写入缓存。 */
+    fun testDetailSources() {
+        val movie = _state.value.detailMovie ?: return
+        if (_state.value.detailSpeedTesting) return
+        val selectedAtStart = _state.value.selectedSourceIndex
+        detailSpeedJob?.cancel()
+        _state.update { it.copy(detailSpeedTesting = true) }
+        detailSpeedJob = viewModelScope.launch {
+            val measuredAt = System.currentTimeMillis()
+            val results = runCatching { speedTester.measureSources(movie.playSources) }
+                .getOrElse { emptyList() }
+            if (results.isEmpty()) {
+                _state.update { it.copy(detailSpeedTesting = false) }
+                return@launch
+            }
+            _state.update { state ->
+                val active = state.detailMovie
+                if (active == null || active.apiLineId != movie.apiLineId || active.id != movie.id) {
+                    state.copy(detailSpeedTesting = false)
+                } else {
+                    // 失败结果也保留，详情页才能标记“测速失败”而不是当作没测过。
+                    val byIndex = results.mapIndexedNotNull { index, result ->
+                        index.takeIf { it < movie.playSources.size }?.let { it to result }
+                    }.toMap()
+                    speedCacheRepository?.saveSourceSpeeds(
+                        movieKey = movieSpeedCacheKey(movie.apiLineId, movie.id),
+                        speeds = movie.playSources.mapIndexedNotNull { index, source ->
+                            results.getOrNull(index)?.let { source.speedCacheKey() to CachedSpeed.from(it) }
+                        }.toMap(),
+                        measuredAtMs = measuredAt,
+                    )
+                    val fastestIndex = results.indices
+                        .filter { index -> results[index].ok }
+                        .minWithOrNull(
+                            compareBy(
+                                { index -> results[index].latencyMs.coerceAtLeast(1L) },
+                                { index -> -results[index].kbps },
+                            ),
+                        )
+                    val switchToFastest = fastestIndex != null &&
+                        state.appSettings.preferFastestLine &&
+                        state.selectedSourceIndex == selectedAtStart &&
+                        fastestIndex != state.selectedSourceIndex
+                    state.copy(
+                        detailSourceSpeeds = byIndex,
+                        detailSpeedTesting = false,
+                        detailSpeedMeasuredAtMs = measuredAt,
+                        selectedSourceIndex = if (switchToFastest) fastestIndex else state.selectedSourceIndex,
+                        selectedEpisodeIndex = if (switchToFastest) 0 else state.selectedEpisodeIndex,
+                    )
+                }
+            }
+            speedTestedMovieKey = movieSpeedCacheKey(movie.apiLineId, movie.id)
+        }
+    }
+
+    private fun loadCachedSourceSpeeds(movie: Movie): Pair<Map<Int, SpeedResult>, Long>? {
+        val repository = speedCacheRepository ?: return null
+        val cached = runCatching {
+            repository.loadSourceSpeeds(movieSpeedCacheKey(movie.apiLineId, movie.id))
+        }.getOrNull() ?: return null
+        val results = cached.toResultsByIndex(movie.playSources)
+        return if (results.isEmpty()) null else results to cached.measuredAtMs
+    }
+
+    /** 设置开启“打开详情时测速”且当前没有缓存时，首屏加载完自动测一次。 */
+    private fun maybeStartDetailSpeedTest(movie: Movie) {
+        if (!_state.value.appSettings.speedTestOnOpen) return
+        val movieKey = movieSpeedCacheKey(movie.apiLineId, movie.id)
+        if (speedTestedMovieKey == movieKey || _state.value.detailSpeedTesting) return
+        if (_state.value.detailSourceSpeeds.isNotEmpty()) {
+            speedTestedMovieKey = movieKey
+            return
+        }
+        speedTestedMovieKey = movieKey
+        testDetailSources()
     }
 
     fun selectPlaySource(index: Int) {
@@ -1288,9 +1479,14 @@ class TvBoxViewModel(
                     return@launch
                 }
                 val (sourceIndex, episodeIndex) = resolveHistoryPosition(movie, item)
+                val cachedSpeeds = loadCachedSourceSpeeds(movie)
+                speedTestedMovieKey = movieSpeedCacheKey(movie.apiLineId, movie.id)
                 _state.update {
                     it.copy(
                         detailMovie = movie, detailLoading = false, detailError = null,
+                        detailSourceSpeeds = cachedSpeeds?.first.orEmpty(),
+                        detailSpeedMeasuredAtMs = cachedSpeeds?.second ?: 0L,
+                        detailSpeedTesting = false,
                         selectedSourceIndex = sourceIndex, selectedEpisodeIndex = episodeIndex,
                         playerSourceIndex = sourceIndex, playerEpisodeIndex = episodeIndex,
                         playerStartPositionMs = startPositionMs.coerceAtLeast(0L),

@@ -253,7 +253,7 @@ class DefaultAppUpdateRepository(
 
 }
 
-private const val UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/ZxxXinI/tvbox/main/update.json"
+private const val UPDATE_MANIFEST_URL = "https://tvbox.pfac.fun:8443/api/update.json"
 private const val USER_AGENT = "TVBox-Android"
 
 @Serializable

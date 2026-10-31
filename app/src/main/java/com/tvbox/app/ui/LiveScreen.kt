@@ -91,25 +91,43 @@ fun LiveScreen(
     state: TvBoxUiState,
     actions: TvBoxViewModel,
 ) {
+    // 页面级返回必须先于内容状态注册：直播源加载失败或一直转圈时页面里没有播放器，
+    // 之前只有播放页内部的 BackHandler，遥控器返回键会被系统直接吞掉，用户被困在电视页。
+    BackHandler { actions.goBack() }
     val session = rememberPlaybackSession()
     BindPlaybackSession(session, null)
     PageSurface { padding ->
-        when {
-            state.liveLoading -> LoadingState(
-                text = "正在加载直播源",
-                modifier = Modifier.padding(padding),
-            )
-            state.liveError != null -> ErrorState(
-                message = state.liveError,
-                onRetry = actions::refreshLive,
-                modifier = Modifier.padding(padding),
-            )
-            state.liveChannels.isEmpty() -> ErrorState(
-                message = "没有可用直播频道",
-                onRetry = actions::refreshLive,
-                modifier = Modifier.padding(padding),
-            )
-            else -> LivePlayerScreen(state = state, actions = actions, session = session)
+        Box(Modifier.fillMaxSize()) {
+            when {
+                state.liveLoading -> LoadingState(
+                    text = "正在加载直播源",
+                    modifier = Modifier.padding(padding),
+                )
+                state.liveError != null -> ErrorState(
+                    message = state.liveError,
+                    onRetry = actions::refreshLive,
+                    modifier = Modifier.padding(padding),
+                )
+                state.liveChannels.isEmpty() -> ErrorState(
+                    message = "没有可用直播频道",
+                    onRetry = actions::refreshLive,
+                    modifier = Modifier.padding(padding),
+                )
+                else -> LivePlayerScreen(state = state, actions = actions, session = session)
+            }
+            // 电视端进入直播页后隐藏了左侧导航，错误/加载态又没有可聚焦的退出入口。
+            // 固定放一个“返回首页”按钮，保证遥控器始终能离开电视页。
+            if (state.liveLoading || state.liveError != null || state.liveChannels.isEmpty()) {
+                ControlButton(
+                    text = "返回首页",
+                    onClick = actions::goBack,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(padding)
+                        .padding(top = 8.dp, end = 8.dp),
+                    primary = true,
+                )
+            }
         }
     }
 }

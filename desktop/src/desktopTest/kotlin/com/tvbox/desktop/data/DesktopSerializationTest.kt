@@ -1,5 +1,7 @@
 package com.tvbox.desktop.data
 
+import com.tvbox.app.data.SkipMarks
+import com.tvbox.app.data.SkipMarksRepository
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json

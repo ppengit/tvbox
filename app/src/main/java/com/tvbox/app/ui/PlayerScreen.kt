@@ -125,6 +125,27 @@ fun PlayerScreen(
     var uiPosition by remember { mutableStateOf(0L) }
     var uiDuration by remember { mutableStateOf(0L) }
     var uiPlaying by remember { mutableStateOf(true) }
+    val skipMarksKey = "${movie.apiLineId}:${movie.id}"
+    val skipMarks = state.skipMarks[skipMarksKey]
+    val introEndMs = skipMarks?.introEndMs ?: 0L
+    val outroStartMs = skipMarks?.outroStartMs ?: 0L
+    val skipSummary = if (skipMarks == null) {
+        "未设置"
+    } else {
+        "片头 ${if (skipMarks.hasIntro) formatPlayerTime(skipMarks.introEndMs) else "未设置"} · " +
+            "片尾 ${if (skipMarks.hasOutro) formatPlayerTime(skipMarks.outroStartMs) else "未设置"}"
+    }
+    val inIntro = introEndMs > 0L && introEndMs < 30 * 60_000L &&
+        uiPosition in 1_000L until introEndMs
+    val inOutro = outroStartMs > 0L && uiDuration > outroStartMs + 5_000L &&
+        uiPosition >= outroStartMs && state.playerEpisodeIndex < source.episodes.lastIndex
+    var autoSkipPrompt by remember { mutableStateOf<String?>(null) }
+    var introHandled by remember(movie.apiLineId, movie.id, state.playerEpisodeIndex, state.playerSourceIndex) {
+        mutableStateOf(false)
+    }
+    var outroHandled by remember(movie.apiLineId, movie.id, state.playerEpisodeIndex, state.playerSourceIndex) {
+        mutableStateOf(false)
+    }
     BackHandler {
         when {
             controlsPanel != PlayerPanel.None -> controlsPanel = PlayerPanel.None
@@ -389,6 +410,48 @@ fun PlayerScreen(
         if (playbackNotice == null) return@LaunchedEffect
         delay(2_000L)
         playbackNotice = null
+    }
+
+    LaunchedEffect(autoSkipPrompt) {
+        val prompt = autoSkipPrompt ?: return@LaunchedEffect
+        delay(if (prompt.contains("秒")) 1_200L else 1_600L)
+        if (autoSkipPrompt == prompt) autoSkipPrompt = null
+    }
+
+    // 片头自动跳过给 3 秒反悔时间；暂停或用户手动拖动时会取消这一轮。
+    LaunchedEffect(inIntro, uiPlaying, state.playerSourceIndex, state.playerEpisodeIndex, introEndMs, state.appSettings.autoSkipIntro) {
+        if (!inIntro || !uiPlaying || introHandled || !state.appSettings.autoSkipIntro) return@LaunchedEffect
+        for (remaining in 3 downTo 1) {
+            autoSkipPrompt = "片头 ${remaining} 秒后跳过"
+            delay(1_000L)
+        }
+        if (introHandled || !isCurrentPlayback()) return@LaunchedEffect
+        if (player.currentPosition < introEndMs) {
+            bufferMonitor.onSeekStarted(System.currentTimeMillis())
+            player.seekTo(introEndMs)
+            resumeAnchor.update(introEndMs)
+            saveCurrentProgress(introEndMs, uiDuration)
+            introHandled = true
+            autoSkipPrompt = "已跳过片头"
+        }
+    }
+
+    // 片尾跳过只在还有下一集时生效，最后一集保持正常播放到结束。
+    LaunchedEffect(inOutro, uiPlaying, state.playerSourceIndex, state.playerEpisodeIndex, outroStartMs, state.appSettings.autoSkipOutro) {
+        if (!inOutro || !uiPlaying || outroHandled || !state.appSettings.autoSkipOutro) return@LaunchedEffect
+        for (remaining in 8 downTo 1) {
+            autoSkipPrompt = "片尾 ${remaining} 秒后播放下一集"
+            delay(1_000L)
+        }
+        if (outroHandled || !isCurrentPlayback()) return@LaunchedEffect
+        val nextIndex = state.playerEpisodeIndex + 1
+        if (nextIndex <= source.episodes.lastIndex && player.currentPosition >= outroStartMs) {
+            outroHandled = true
+            saveCurrentProgress(player.currentPosition, uiDuration)
+            player.seekTo(nextIndex, 0)
+            session.play(player)
+            autoSkipPrompt = "已跳到下一集"
+        }
     }
 
     LaunchedEffect(bufferingCheckNonce, bufferingPlaybackKey) {
@@ -826,6 +889,7 @@ fun PlayerScreen(
                 sourceIndex = state.playerSourceIndex, episodeIndex = player.currentMediaItemIndex.coerceIn(0, source.episodes.lastIndex),
                 positionMs = uiPosition, durationMs = uiDuration, playing = uiPlaying,
                 speed = state.playerSpeed, panel = controlsPanel,
+                skipSummary = skipSummary,
                 videoScaleMode = state.appSettings.videoScaleMode,
                 onPanel = { controlsPanel = it; controlsInteraction++ },
                 onToggle = { togglePlaybackByGesture(); controlsInteraction++ },
@@ -849,6 +913,29 @@ fun PlayerScreen(
                     controlsInteraction++
                 },
                 onVideoScale = { mode -> actions.updateVideoScaleMode(mode); controlsInteraction++ },
+                onSetIntroEnd = {
+                    val position = player.currentPosition.coerceAtLeast(0L)
+                    playbackNotice = if (actions.setSkipIntroEnd(position)) {
+                        "片头结束已记为 ${formatPlayerTime(position)}"
+                    } else {
+                        "片头不能晚于片尾标记"
+                    }
+                    controlsInteraction++
+                },
+                onSetOutroStart = {
+                    val position = player.currentPosition.coerceAtLeast(0L)
+                    playbackNotice = if (actions.setSkipOutroStart(position)) {
+                        "片尾开始已记为 ${formatPlayerTime(position)}"
+                    } else {
+                        "片尾必须晚于片头标记"
+                    }
+                    controlsInteraction++
+                },
+                onClearSkipMarks = {
+                    actions.clearSkipMarks()
+                    playbackNotice = "已清除本剧的片头片尾标记"
+                    controlsInteraction++
+                },
                 onSeek = { position ->
                     bufferMonitor.onSeekStarted(System.currentTimeMillis())
                     player.seekTo(position)
@@ -858,7 +945,7 @@ fun PlayerScreen(
                 onScrubbing = { scrubbing = it },
             )
         }
-        val playbackStatus = playbackIssue?.message ?: playbackNotice
+        val playbackStatus = playbackIssue?.message ?: autoSkipPrompt ?: playbackNotice
         if (playbackStatus != null) {
             GesturePrompt(
                 text = playbackStatus,

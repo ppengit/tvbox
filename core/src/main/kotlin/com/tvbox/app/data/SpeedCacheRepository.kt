@@ -1,8 +1,5 @@
-package com.tvbox.desktop.data
+package com.tvbox.app.data
 
-import com.tvbox.app.data.AppLog
-import com.tvbox.app.data.KeyValueStore
-import com.tvbox.app.data.SpeedResult
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -158,7 +155,7 @@ class SpeedCacheRepository(private val store: KeyValueStore) {
  * 同一条播放源在不同批次的线路列表里顺序可能变，缓存必须按稳定身份匹配。
  * 优先线路 id，其次线路名，再退回播放源名。
  */
-internal fun com.tvbox.app.domain.PlaySource.speedCacheKey(): String =
+fun com.tvbox.app.domain.PlaySource.speedCacheKey(): String =
     listOf(lineId, lineName, name).joinToString("|")
 
-internal fun movieSpeedCacheKey(apiLineId: String, movieId: Int): String = "$apiLineId:$movieId"
+fun movieSpeedCacheKey(apiLineId: String, movieId: Int): String = "$apiLineId:$movieId"

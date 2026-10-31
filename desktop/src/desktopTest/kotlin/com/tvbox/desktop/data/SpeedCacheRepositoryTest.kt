@@ -1,7 +1,11 @@
 package com.tvbox.desktop.data
 
+import com.tvbox.app.data.CachedSpeed
 import com.tvbox.app.data.KeyValueStore
+import com.tvbox.app.data.SpeedCacheRepository
 import com.tvbox.app.data.SpeedResult
+import com.tvbox.app.data.movieSpeedCacheKey
+import com.tvbox.app.data.speedCacheKey
 import com.tvbox.app.domain.PlaySource
 import kotlin.test.Test
 import kotlin.test.assertEquals

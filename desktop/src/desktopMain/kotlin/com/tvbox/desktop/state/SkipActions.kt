@@ -1,7 +1,7 @@
 package com.tvbox.desktop.state
 
 import com.tvbox.app.domain.Movie
-import com.tvbox.desktop.data.SkipMarks
+import com.tvbox.app.data.SkipMarks
 
 /**
  * 片头片尾标记。同一部剧的所有集共用一组，按剧（而非按集）存储；

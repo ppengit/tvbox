@@ -1,5 +1,7 @@
 package com.tvbox.desktop.data
 
+import com.tvbox.app.data.SkipMarks
+import com.tvbox.app.data.SkipMarksRepository
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals

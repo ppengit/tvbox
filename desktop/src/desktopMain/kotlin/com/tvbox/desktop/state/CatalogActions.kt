@@ -7,7 +7,7 @@ import com.tvbox.app.domain.WatchHistoryItem
 import com.tvbox.app.domain.findBestTitleMatchIndex
 import com.tvbox.app.domain.historyKey
 import com.tvbox.app.domain.resolveHistoryEpisodePosition
-import com.tvbox.desktop.data.movieSpeedCacheKey
+import com.tvbox.app.data.movieSpeedCacheKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch

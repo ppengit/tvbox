@@ -11,6 +11,8 @@ import com.tvbox.app.data.LineSpeedTester
 import com.tvbox.app.data.StreamPrefetcher
 import com.tvbox.app.data.LiveRepository
 import com.tvbox.app.data.MovieRepository
+import com.tvbox.app.data.SkipMarksRepository
+import com.tvbox.app.data.SpeedCacheRepository
 import com.tvbox.app.data.PersistentAppSettingsRepository
 import com.tvbox.app.data.PersistentDoubanHotCache
 import com.tvbox.app.data.PersistentHistoryRepository
@@ -87,17 +89,20 @@ class AppContainer {
     val searchHistoryRepository: SearchHistoryRepository = SearchHistoryRepository(searchHistoryStore)
 
     /**
-     * 平台直播依赖一个外部解析服务。电视端把地址编进 APK，桌面端改为可配置：
-     * 优先读本地设置，其次读环境变量，都没有时直播页会提示去设置里填写。
+     * 平台直播依赖一个外部解析服务。电视端把地址编进 APK，桌面端优先读本地设置，
+     * 其次读环境变量；两者都没有时使用 APK 同款公共服务，避免开箱就提示“未配置”。
      */
     var platformLiveServiceUrl: String
         get() = desktopStore.getString(PLATFORM_LIVE_KEY)?.takeIf { it.isNotBlank() }
-            ?: System.getenv("TVBOX_PLATFORM_LIVE_SERVICE_URL").orEmpty()
+            ?: System.getenv("TVBOX_PLATFORM_LIVE_SERVICE_URL").orEmpty().ifBlank {
+                DEFAULT_PLATFORM_LIVE_SERVICE_URL
+            }
         set(value) {
             desktopStore.edit { putString(PLATFORM_LIVE_KEY, value.trim()) }
         }
 
     private companion object {
         const val PLATFORM_LIVE_KEY = "platform_live_service_url"
+        const val DEFAULT_PLATFORM_LIVE_SERVICE_URL = "http://20.205.10.127:8868"
     }
 }

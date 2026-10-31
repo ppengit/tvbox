@@ -442,6 +442,12 @@ private class TvBoxViewModelFactory(
             platformLiveFavoritesRepository = PersistentPlatformLiveFavoritesRepository(
                 PreferenceKeyValueStore(context, AppStorageNames.PLATFORM_LIVE_FAVORITES),
             ),
+            speedCacheRepository = com.tvbox.app.data.SpeedCacheRepository(
+                PreferenceKeyValueStore(context, AppStorageNames.SPEED_CACHE),
+            ),
+            skipMarksRepository = com.tvbox.app.data.SkipMarksRepository(
+                PreferenceKeyValueStore(context, AppStorageNames.SKIP_MARKS),
+            ),
         ) as T
     }
 }

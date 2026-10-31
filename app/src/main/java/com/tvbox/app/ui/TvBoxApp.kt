@@ -776,6 +776,116 @@ private fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
+                                text = "自动跳过片头",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = if (state.appSettings.autoSkipIntro) {
+                                    "记录片头后在播放时倒计时 3 秒自动跳过"
+                                } else {
+                                    "已关闭，仍可在播放页手动记录片头"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = state.appSettings.autoSkipIntro,
+                            onCheckedChange = actions::updateAutoSkipIntro,
+                        )
+                    }
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "自动跳过片尾",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = if (state.appSettings.autoSkipOutro) {
+                                    "片尾倒计时 8 秒后播放下一集，最后一集不跳过"
+                                } else {
+                                    "已关闭，片尾会正常播放到结束"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = state.appSettings.autoSkipOutro,
+                            onCheckedChange = actions::updateAutoSkipOutro,
+                        )
+                    }
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    SettingsSectionTitle(
+                        title = "测速",
+                        subtitle = "在详情页测量当前影片各条播放源，结果按延迟排序并缓存。",
+                    )
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "打开详情自动测速",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = if (state.appSettings.speedTestOnOpen) {
+                                    "没有缓存时自动测量当前影片的播放源"
+                                } else {
+                                    "已关闭，可在详情页手动点“测速”"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = state.appSettings.speedTestOnOpen,
+                            onCheckedChange = actions::updateSpeedTestOnOpen,
+                        )
+                    }
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "自动选中最快线路",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = if (state.appSettings.preferFastestLine) {
+                                    "测速完成后自动切到延迟最低的播放源"
+                                } else {
+                                    "已关闭，仅在详情页标注推荐线路"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = state.appSettings.preferFastestLine,
+                            onCheckedChange = actions::updatePreferFastestLine,
+                        )
+                    }
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
                                 text = "线路质量统计",
                                 style = MaterialTheme.typography.titleMedium,
                             )
@@ -793,9 +903,31 @@ private fun SettingsScreen(
                     }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "测速缓存",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = "缓存各影片播放源的测速结果，清除后下次打开会重新测量",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        SettingsActionButton(
+                            text = "清除缓存",
+                            onClick = actions::clearSpeedCache,
+                        )
+                    }
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
                     SettingsSectionTitle(
                         title = "更新",
-                        subtitle = "控制应用启动时是否自动检查 GitHub Release 更新。",
+                        subtitle = "从 tvbox.pfac.fun:8443 检查新版本；启动检查失败时不会弹窗打扰。",
                     )
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) {
@@ -812,6 +944,19 @@ private fun SettingsScreen(
                             Text(
                                 text = if (state.appSettings.checkUpdatesOnStartup) "已开启" else "已关闭",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = when (state.updateServerStatus) {
+                                    UpdateServerStatus.Connected -> "更新服务器连接正常"
+                                    UpdateServerStatus.Unavailable -> "更新服务器连接异常"
+                                    UpdateServerStatus.Unknown -> "更新服务器尚未检查"
+                                },
+                                color = when (state.updateServerStatus) {
+                                    UpdateServerStatus.Unavailable -> MaterialTheme.colorScheme.error
+                                    UpdateServerStatus.Connected -> MaterialTheme.colorScheme.primary
+                                    UpdateServerStatus.Unknown -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
                             )
                             if (state.updateError != null) {
                                 Spacer(modifier = Modifier.height(6.dp))

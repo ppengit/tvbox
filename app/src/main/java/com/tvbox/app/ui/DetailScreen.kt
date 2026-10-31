@@ -46,6 +46,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.tvbox.app.data.SpeedResult
 import com.tvbox.app.domain.Movie
 import com.tvbox.app.domain.PlayEpisode
 import com.tvbox.app.domain.PlaybackAgent
@@ -174,6 +175,27 @@ fun DetailScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = speedFreshnessText(
+                                speedTesting = state.detailSpeedTesting,
+                                measuredAtMs = state.detailSpeedMeasuredAtMs,
+                                nowMs = System.currentTimeMillis(),
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Button(
+                            onClick = actions::testDetailSources,
+                            enabled = !state.detailSpeedTesting && movie.playSources.isNotEmpty(),
+                        ) {
+                            Text(if (state.detailSpeedTesting) "测速中…" else "测速")
+                        }
+                    }
                     if (
                         state.detailTotalSources > 1 &&
                         state.detailCompletedSources < state.detailTotalSources
@@ -190,6 +212,7 @@ fun DetailScreen(
                         selectedIndex = state.selectedSourceIndex,
                         selectedEpisodeIndex = state.selectedEpisodeIndex,
                         playbackHealth = state.playbackHealth,
+                        sourceSpeeds = state.detailSourceSpeeds,
                         onSelect = actions::selectPlaySource,
                     )
                     Spacer(modifier = Modifier.height(if (compact) 10.dp else 16.dp))
@@ -212,6 +235,7 @@ private fun PlaySourceTabs(
     selectedIndex: Int,
     selectedEpisodeIndex: Int,
     playbackHealth: PlaybackHealthSnapshot,
+    sourceSpeeds: Map<Int, SpeedResult>,
     onSelect: (Int) -> Unit,
 ) {
     val sources = movie.playSources
@@ -221,15 +245,28 @@ private fun PlaySourceTabs(
     }
     val playbackAgent = remember { PlaybackAgent() }
     val nowMs = System.currentTimeMillis()
-    val recommendedIndex = playbackAgent.selectBestSource(
+    val fastestIndex = sourceSpeeds.entries
+        .filter { it.value.ok }
+        .minWithOrNull(compareBy({ it.value.latencyMs.coerceAtLeast(1L) }, { -it.value.kbps }))
+        ?.key
+    val recommendedIndex = fastestIndex ?: playbackAgent.selectBestSource(
         movie = movie,
         requestedSourceIndex = selectedIndex,
         episodeIndex = selectedEpisodeIndex,
         healthSnapshot = playbackHealth,
         nowMs = nowMs,
     )?.sourceIndex
+    // 测速完成后按延迟升序、带宽降序展示；没有测速结果时保持原始顺序。
+    val displayOrder = sources.indices.sortedWith(
+        compareBy(
+            { sourceSpeeds[it]?.takeIf { speed -> speed.ok }?.latencyMs ?: Long.MAX_VALUE },
+            { -(sourceSpeeds[it]?.kbps ?: 0.0) },
+            { it },
+        ),
+    )
     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        itemsIndexed(sources) { index, source ->
+        itemsIndexed(displayOrder) { _, index ->
+            val source = sources[index]
             val statusLabel = playSourceStatusLabel(
                 movieId = movie.id,
                 source = source,
@@ -238,6 +275,7 @@ private fun PlaySourceTabs(
                 playbackHealth = playbackHealth,
                 recommendedIndex = recommendedIndex,
                 nowMs = nowMs,
+                speed = sourceSpeeds[index],
             )
             CategoryPill(
                 label = listOfNotNull(source.name, statusLabel).joinToString(" · "),
@@ -349,11 +387,33 @@ private fun playSourceStatusLabel(
     playbackHealth: PlaybackHealthSnapshot,
     recommendedIndex: Int?,
     nowMs: Long,
+    speed: SpeedResult?,
 ): String? {
     val key = playbackHealthKey(movieId, episodeIndex, source)
-    return when (playbackHealth.entryFor(key)?.recentIssueType(nowMs)) {
+    val healthLabel = when (playbackHealth.entryFor(key)?.recentIssueType(nowMs)) {
         PlaybackIssueType.Error -> "近期失败"
         PlaybackIssueType.SlowBuffer -> "较慢"
         null -> if (sourceIndex == recommendedIndex) "推荐" else null
     }
+    val speedLabel = when {
+        speed == null -> null
+        !speed.ok -> "测速失败"
+        speed.latencyMs > 0 -> "${speed.latencyMs}ms"
+        else -> null
+    }
+    return listOfNotNull(healthLabel, speedLabel).joinToString(" · ").ifBlank { null }
+}
+
+/** 详情页测速结果的新鲜度提示，与桌面端保持同一套文案。 */
+private fun speedFreshnessText(speedTesting: Boolean, measuredAtMs: Long, nowMs: Long): String {
+    if (speedTesting) return "测速中…"
+    if (measuredAtMs <= 0L) return "测速后按延迟排序"
+    val minutes = ((nowMs - measuredAtMs).coerceAtLeast(0L)) / 60_000L
+    val freshness = when {
+        minutes < 1L -> "刚刚测速"
+        minutes < 60L -> "${minutes} 分钟前测速"
+        minutes < 24L * 60L -> "${minutes / 60L} 小时前测速"
+        else -> "${minutes / (24L * 60L)} 天前测速"
+    }
+    return "$freshness · 按延迟排序"
 }

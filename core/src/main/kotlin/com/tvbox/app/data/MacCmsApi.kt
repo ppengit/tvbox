@@ -224,6 +224,14 @@ object ApiLines {
             baseUrls = listOf("https://cj.yayazy.net/api.php/provide/vod/"),
         ),
         ApiLine(
+            id = "sdzy",
+            name = "闪电",
+            baseUrls = listOf(
+                "https://sdzyapi.com/api.php/provide/vod/",
+                "http://sdzyapi.com/api.php/provide/vod/",
+            ),
+        ),
+        ApiLine(
             id = "hongniu",
             name = "红牛",
             baseUrls = listOf("https://www.hongniuzy2.com/api.php/provide/vod/"),

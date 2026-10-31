@@ -40,7 +40,7 @@ import com.tvbox.app.domain.PlayerRemotePolicy
 import com.tvbox.app.domain.VideoScaleMode
 import com.tvbox.app.domain.correspondingEpisodeIndex
 
-internal enum class PlayerPanel { None, Episodes, Sources, Speeds, Picture, Help }
+internal enum class PlayerPanel { None, Episodes, Sources, Speeds, Picture, Skip, Help }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,6 +54,7 @@ internal fun PlayerControls(
     playing: Boolean,
     speed: Float,
     panel: PlayerPanel,
+    skipSummary: String,
     videoScaleMode: VideoScaleMode,
     onPanel: (PlayerPanel) -> Unit,
     onToggle: () -> Unit,
@@ -61,6 +62,9 @@ internal fun PlayerControls(
     onSource: (Int) -> Unit,
     onSpeed: (Float) -> Unit,
     onVideoScale: (VideoScaleMode) -> Unit,
+    onSetIntroEnd: () -> Unit,
+    onSetOutroStart: () -> Unit,
+    onClearSkipMarks: () -> Unit,
     onSeek: (Long) -> Unit,
     onInteraction: () -> Unit,
     onScrubbing: (Boolean) -> Unit,
@@ -75,6 +79,7 @@ internal fun PlayerControls(
     val sourceFocus = remember { FocusRequester() }
     val speedFocus = remember { FocusRequester() }
     val pictureFocus = remember { FocusRequester() }
+    val skipFocus = remember { FocusRequester() }
     val helpFocus = remember { FocusRequester() }
     val closeFocus = remember { FocusRequester() }
     var returnFocus by remember { mutableStateOf<FocusRequester?>(null) }
@@ -161,6 +166,7 @@ internal fun PlayerControls(
                     ControlButton("线路", { returnFocus = sourceFocus; onPanel(PlayerPanel.Sources) }, Modifier.focusRequester(sourceFocus), onFocused = onInteraction)
                     ControlButton(formatPlayerSpeed(speed), { returnFocus = speedFocus; onPanel(PlayerPanel.Speeds) }, Modifier.focusRequester(speedFocus), onFocused = onInteraction)
                     ControlButton("画面", { returnFocus = pictureFocus; onPanel(PlayerPanel.Picture) }, Modifier.focusRequester(pictureFocus), onFocused = onInteraction)
+                    ControlButton("跳过", { returnFocus = skipFocus; onPanel(PlayerPanel.Skip) }, Modifier.focusRequester(skipFocus), onFocused = onInteraction)
                     ControlButton("帮助", { returnFocus = helpFocus; onPanel(PlayerPanel.Help) }, Modifier.focusRequester(helpFocus), onFocused = onInteraction)
                 }
             }
@@ -171,6 +177,7 @@ internal fun PlayerControls(
                 PlayerPanel.Sources -> sources.map { it.name }
                 PlayerPanel.Speeds -> playerSpeeds.map(::formatPlayerSpeed)
                 PlayerPanel.Picture -> VideoScaleMode.entries.map { it.displayName }
+                PlayerPanel.Skip -> listOf("设片头结束于此", "设片尾开始于此", "清除片头片尾")
                 PlayerPanel.Help -> listOf("方向键：浏览", "确认键：选择", "返回键：关闭", "数字 1/3：上一集/下一集", "菜单键：循环倍速")
                 PlayerPanel.None -> emptyList()
             }
@@ -179,7 +186,7 @@ internal fun PlayerControls(
                 PlayerPanel.Sources -> sourceIndex
                 PlayerPanel.Speeds -> playerSpeeds.indexOf(speed).coerceAtLeast(0)
                 PlayerPanel.Picture -> VideoScaleMode.entries.indexOf(videoScaleMode)
-                PlayerPanel.Help, PlayerPanel.None -> 0
+                PlayerPanel.Help, PlayerPanel.Skip, PlayerPanel.None -> -1
             }
             val pickerFocus = remember(panel, labels.size) { List(labels.size) { FocusRequester() } }
             val grid = rememberLazyGridState()
@@ -212,11 +219,15 @@ internal fun PlayerControls(
                                     PlayerPanel.Episodes -> "选择集数 · ${source.episodes.size} 集"
                                     PlayerPanel.Sources -> "选择线路 · ${sources.size} 条"
                                     PlayerPanel.Picture -> "画面比例 · ${videoScaleMode.displayName}"
+                                    PlayerPanel.Skip -> "片头片尾 · $skipSummary"
                                     PlayerPanel.Help -> "遥控操作指南"
                                     else -> "播放倍速 · 当前 ${formatPlayerSpeed(speed)}"
                                 }, style = MaterialTheme.typography.titleMedium)
-                                Text(if (panel == PlayerPanel.Help) "控制栏与全屏播放均可使用遥控器操作"
-                                    else "当前：${labels.getOrNull(selected).orEmpty()}",
+                                Text(when (panel) {
+                                    PlayerPanel.Help -> "控制栏与全屏播放均可使用遥控器操作"
+                                    PlayerPanel.Skip -> "先停在想跳过的时间点，再记录片头结束或片尾开始；标记按剧共用"
+                                    else -> "当前：${labels.getOrNull(selected).orEmpty()}"
+                                },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White.copy(alpha = 0.65f))
                             }
@@ -256,7 +267,12 @@ internal fun PlayerControls(
                                         PlayerPanel.Sources -> onSource(index)
                                         PlayerPanel.Speeds -> onSpeed(playerSpeeds[index])
                                         PlayerPanel.Picture -> onVideoScale(VideoScaleMode.entries[index])
-                                        else -> Unit
+                                        PlayerPanel.Skip -> when (index) {
+                                            0 -> onSetIntroEnd()
+                                            1 -> onSetOutroStart()
+                                            else -> onClearSkipMarks()
+                                        }
+                                        PlayerPanel.Help, PlayerPanel.None -> Unit
                                     }
                                     onPanel(PlayerPanel.None)
                                 }, Modifier.focusRequester(pickerFocus[index]), enabled, onFocused = onInteraction)

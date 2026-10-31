@@ -2,7 +2,7 @@
 
 TVBox 是一个面向 Android TV / 电视盒子的影视播放应用，使用 Kotlin、Jetpack Compose 和 Media3 ExoPlayer 构建。应用重点适配遥控器操作，支持影视分类、搜索、详情、m3u8 播放、观看历史、电视直播和 OTA 更新。
 
-当前源码版本为 `1.3.13`（`versionCode=10313`）。本版本合并 [PR #5](https://github.com/ZxxXinI/tvbox/pull/5)，修复重新进入搜索页后遥控器无法退格删除旧关键词的问题；感谢 [@lliyuu520](https://github.com/lliyuu520) 提交修复。保留此前设备模式与 OTA 安装包保存能力；服务端部署方式见 [多平台直播服务部署说明](platform_live_server/DEPLOYMENT.md)。
+当前源码版本为 `1.4.1`（`versionCode=10401`）。本版把桌面端已有的详情测速、测速缓存、片头片尾跳过带到电视端，修复进入直播后无法返回首页，补齐桌面端电视直播与平台直播的默认入口，并将 OTA 更新切换到自建的 `https://tvbox.pfac.fun:8443` 渠道；服务端部署方式见 [多平台直播服务部署说明](platform_live_server/DEPLOYMENT.md)。
 
 > 请确保使用的影视与直播接口具备合法授权。本项目仅提供客户端能力，不内置或托管影视内容。
 
@@ -42,10 +42,12 @@ TVBox 是一个面向 Android TV / 电视盒子的影视播放应用，使用 Ko
 - 遥控器友好：方向键、确认键、返回键、菜单键和数字键均有对应交互。
 - 首页影视列表：默认展示豆瓣热播剧集，支持海报、评分、分页加载、焦点高亮；点击热播卡片后才按片名从当前影视数据源查找详情与播放资源。
 - 主题切换：设置页支持“默认主题”和“影院主题”；默认主题保留原有顶部快捷入口，影院主题提供左侧图标导航和 Hero 推荐布局。
-- 视频接口管理：内置《影视线路地址整理.md》收录的 32 个资源站，并保留原有扩展线路；设置页可选择首页数据源，也可手机扫码添加 MacCms 自定义接口。
+- 视频接口管理：内置《影视线路地址整理.md》收录的 30 余个资源站，并保留原有扩展线路；设置页可选择首页数据源，也可手机扫码添加 MacCms 自定义接口。
 - 搜索与详情：关键词搜索最多三条来源并行，结果增量去重显示；重新进入搜索页时光标位于旧关键词末尾，可用遥控器退格删除。详情页优先显示主来源，后台补齐播放源和选集。
 - AI 找片：支持文字、应用内语音识别、快捷推荐词和“换一批”，可在设置页用手机扫码配置大模型、模型名和 API Key。
 - 播放器：基于 Media3 ExoPlayer，仅使用其视频解码与画面窗口；TVBox 自行处理遥控器快退/快进、切集、倍速、播放暂停、自动跳下一集和手机播放手势。
+- 详情测速：详情页可手动测量当前影片各条播放源，按延迟升序、带宽降序排列；结果按“剧 + 稳定源标识”缓存，重新打开直接回填，设置页可清除缓存或开启“打开详情自动测速”。
+- 片头片尾：播放页“跳过”面板可在当前位置记录片头结束、片尾开始，标记按剧共用；播放时片头倒计时 3 秒、片尾倒计时 8 秒，可自动跳过或在设置里关闭。
 - 画面比例：点播操作栏“画面”支持自适应、裁剪铺满和拉伸铺满，本机记忆并实时生效；播放页隐藏系统栏，退出后恢复。
 - 设备模式：设置提供“电视模式”和“手机模式”，默认电视模式，本机保存并优先于系统识别；电视短剧保持横屏，手机模式保留点播转屏和普通直播手机布局。
 - 观看历史：记录影片、封面、播放线路、集数、播放进度和更新时间；首页显示最近六部未看完的“继续观看”，原来源优先续播，备用线路后台补齐。
@@ -54,7 +56,7 @@ TVBox 是一个面向 Android TV / 电视盒子的影视播放应用，使用 Ko
 - 平台直播：支持斗鱼、虎牙、哔哩哔哩、抖音和快手，统一提供平台、一级分类、二级分类、直播间和播放器流程，并按平台返回结果优先选择最高画质；直播间可在本机收藏，在直播入口的“收藏”卡片中直接打开。
 - 播放亮屏：所有播放页在前台保持亮屏，暂停时同样生效；退出播放页或切到后台后恢复原设置。
 - 播放中断：切到后台或发生音频焦点中断后暂停，返回后由用户手动恢复播放。
-- OTA 更新：系统后台下载 APK，缺少系统下载组件时使用应用备用下载；小窗显示进度与授权状态，前台完成且获得授权后打开安装器，也可保存 APK 后通过文件管理器手动安装。
+- OTA 更新：从自建 `tvbox.pfac.fun:8443` 渠道检查新版本，启动失败时静默并在设置页显示“更新服务器连接异常”；发现新版本自动询问，系统后台下载 APK，缺少系统下载组件时使用应用备用下载，完成后校验 SHA-256 并打开安装器。
 - 内容过滤：过滤伦理、电影解说、演员、新闻资讯等不需要的分类或资源。
 
 ## 遥控器快捷键
@@ -97,63 +99,58 @@ TVBox 是一个面向 Android TV / 电视盒子的影视播放应用，使用 Ko
 
 ## 安装
 
-从 Release 下载最新 APK：
+自 1.4.0 起，电视端 OTA 使用自建 HTTPS 更新渠道，不再依赖 GitHub Release：
 
-- [Latest Release](https://github.com/ZxxXinI/tvbox/releases/latest)
-- OTA 更新清单：`https://raw.githubusercontent.com/ZxxXinI/tvbox/main/update.json`
+- 更新清单：`https://tvbox.pfac.fun:8443/api/update.json`
+- APK：由 `publish-update.ps1` 发布到同一域名的 `/api/` 目录
+- 服务端只暴露清单和 APK，不支持目录浏览，部署方法见 [`deploy/tvbox-update/README.md`](deploy/tvbox-update/README.md)
 
-通过 ADB 安装：
-
-```powershell
-adb install -r app\build\outputs\apk\release\app-release.apk
-```
-
-如果是从 Release 下载的 APK：
+通过 ADB 安装本地构建：
 
 ```powershell
-adb install -r TVBox-v1.3.13.apk
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
+
+> **签名迁移提醒**：1.4.x 起使用新的 release 签名，与 1.3.13 及更早的 GitHub 包不一致。已经安装旧版的电视需要先卸载一次，再安装 1.4.1；此后同一签名的版本可以直接 OTA 覆盖升级，本机数据会在覆盖安装时保留（卸载会清除应用数据）。
+
+旧版 1.3.13 仍然只认识 GitHub 的 `update.json`；根目录清单保留为旧版兼容文件，不再作为 1.4.x 的更新入口。
 
 ## OTA 更新机制
 
-应用启动后会请求：
+应用启动后请求：
 
 ```text
-https://raw.githubusercontent.com/ZxxXinI/tvbox/main/update.json
+https://tvbox.pfac.fun:8443/api/update.json
 ```
 
-`update.json` 示例：
+清单格式：
 
 ```json
 {
-  "versionCode": 10313,
-  "versionName": "1.3.13",
-  "apkUrl": "https://gh-proxy.org/https://github.com/ZxxXinI/tvbox/releases/download/v1.3.13/TVBox-v1.3.13.apk",
-  "apkSha256": "2c69db103a867ed74d28481dcafd5f395f90d87b5cef6d0592ff12e167597edf",
-  "apkSize": 5034437,
+  "versionCode": 10401,
+  "versionName": "1.4.1",
+  "apkUrl": "https://tvbox.pfac.fun:8443/api/TVBox-v1.4.1.apk",
+  "apkSha256": "e31aff213d2d2d1a96fdcd5fac5b218b25b5ccbc928c558ab863634f7fcd7ce7",
+  "apkSize": 5713981,
   "force": false,
   "changelog": [
-    "修复重新进入搜索页后，遥控器无法退格删除旧关键词的问题。",
-    "搜索框重新进入时光标位于关键词末尾，正常编辑保留光标和输入法状态。",
-    "感谢 lliyuu520 提交 PR #5；保留搜索结果及返回定位逻辑。"
+    "电视端新增详情测速与测速缓存",
+    "电视端新增片头片尾跳过与自动跳过",
+    "修复电视端进入直播后无法返回首页",
+    "补齐桌面端电视直播和平台直播默认入口"
   ]
 }
 ```
 
-说明：
+行为说明：
 
-- `versionCode` 必须大于当前应用版本，才会提示更新。
-- v1.3.13 可通过旧版应用的 OTA 提示更新，也可手动下载 APK 覆盖安装，保留本机数据。
-- 手机用户请到“设置 → 设备模式”选择手机模式；默认电视模式用于避免盒子播放短剧时切成竖屏。
-- 已下载的 APK 可从小窗选择“保存安装包”。系统没有文件选择器时保存到下载目录的 `TVBox` 文件夹；Android 9 需存储授权，手动安装仍受系统权限限制。
-- 旧版若无法在线更新，可从 Release 页面下载 APK 手动覆盖安装。
-- 下载开始后关闭弹窗或按返回不取消任务；后台下载完成时，回到应用后打开安装界面。系统安装仍需用户确认，取消后可从小型进度卡片手动安装；无需悬浮窗权限。
-- `apkUrl` 是 APK 下载地址，目前通过 `gh-proxy.org` 转发 GitHub Release 附件。
-- `apkSha256` 用于下载完成后的完整性校验。
-- `force` 预留强制更新能力，当前普通更新可选择稍后再说。
-- `update.json` 放在 GitHub 仓库根目录，随 `main` 分支更新后，应用会通过 raw 地址读取。
-- APK 附件上传到 GitHub Release，`update.json` 中的 `apkUrl` 指向对应 GitHub Release 附件。
-- `git push` 只会上传代码和 tag，不会自动上传 Release 附件。
+- `versionCode` 必须大于当前安装版本才会提示更新；同版本不会重复下载。
+- 启动检查失败不会弹出打扰，只在“设置 → 更新”显示“更新服务器连接异常”；连接正常时显示“更新服务器连接正常”。
+- 发现新版本时在打开应用后询问是否更新，用户可选择稍后；下载在后台继续，关闭提示不会取消。
+- 下载完成后校验 `apkSize` 与 `apkSha256`，通过后打开系统安装器；系统缺少下载组件时自动改用应用内前台服务下载。
+- `force` 预留给强制更新，当前普通更新允许稍后处理。
+- `update.json` 使用 `Cache-Control: no-store`，APK 与清单只允许从 `/api/` 读取。
+- 域名使用 Cloudflare DNS-only 记录、TTL 60 和家宽 8443 端口；`tvbox-ddns` 容器每 5 分钟同步公网 IP。80/443 被运营商封锁，因此地址必须保留 `:8443`。
 
 ## 本地构建
 
@@ -244,31 +241,34 @@ apksigner verify --print-certs app\build\outputs\apk\release\app-release.apk
 
 ## 发布新版本流程
 
-1. 更新版本号、CHANGELOG 和 README；构建签名 APK 后，根据实际 SHA-256 和大小填写根目录 `update.json`。
-2. 仅暂存本次发布涉及的主工程代码及文档；如开发日志含无关修改，使用分段暂存。
+1. 修改 `app/build.gradle.kts` 的 `versionCode` / `versionName`、`desktop/build.gradle.kts` 的 `desktopVersion`，并更新 `CHANGELOG.md`、本 README 的版本说明。
+2. 运行核心、桌面和 TV 单测，构建签名 APK：
 
 ```powershell
-git add CHANGELOG.md README.md update.json app\build.gradle.kts app\src\main app\src\test app\src\debug devLog\home-player-ui.md devLog\playback-experience.md devLog\release.md
-git add -p devLog\README.md
-git commit -m "Release v1.3.13"
-git tag -a v1.3.13 -m "TVBox v1.3.13"
-git push origin v1.3.13
+.\gradlew.bat :core:test :desktop:desktopTest :app:testDebugUnitTest :app:assembleRelease --console=plain
 ```
 
-3. 创建草稿 Release 并上传 APK 与相同版本的 OTA 清单，检查附件完整性。
+3. 发布到自建更新目录（默认 `D:\Portable\TvBoxUpdate`）：
 
 ```powershell
-gh release create v1.3.13 app\build\outputs\apk\release\TVBox-v1.3.13.apk app\build\outputs\apk\release\update.json --repo ZxxXinI/tvbox --verify-tag --draft --title "TVBox v1.3.13" --notes-file app\build\outputs\apk\release\release-notes.md
+pwsh -NoProfile -File deploy/tvbox-update/publish-update.ps1 `
+  -Apk app/build/outputs/apk/release/app-release.apk `
+  -VersionCode 10401 `
+  -VersionName 1.4.1 `
+  -Changelog @("电视端新增详情测速与测速缓存", "电视端新增片头片尾跳过")
 ```
 
-4. 公开 Release 后推送主分支，使 OTA 清单指向已经可下载的附件。
+脚本会把 APK 复制为 `api/TVBox-v<版本号>.apk`，计算 SHA-256 和大小，并以 UTF-8 无 BOM 原子写入 `api/update.json`。已安装同签名 1.4.x 的电视会在下次启动时收到更新提示。
+
+4. 提交并推送代码：
 
 ```powershell
-gh release edit v1.3.13 --repo ZxxXinI/tvbox --draft=false --latest
-git push origin main
+git add app core desktop deploy CHANGELOG.md README.md
+git commit -m "Release v1.4.1"
+git push origin feature/xiaoji-experience
 ```
 
-> GitHub Release 包含对应版本的 APK 和 `update.json`；应用启动时从 GitHub `main` 分支读取更新清单。
+> 1.4.x 的正式分发通道是 `tvbox.pfac.fun:8443`，不再需要创建 GitHub Release。若需要把 APK 上传到 GitHub Release 或其他公开渠道，必须先单独确认；`git push` 不会上传 APK。
 
 ## 项目结构
 

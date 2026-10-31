@@ -1,0 +1,25 @@
+# 追加到 DuanJu 的 deploy/caddy/Caddyfile。
+# Caddy 与 parrot-tv-redirect 已经监听 8443；这里只增加一个按 SNI 区分的站点，
+# 由 tvbox-update 容器提供静态 APK 与 update.json；
+# DNS 使用灰云 + TTL 60，客户端固定访问 :8443（家宽 443 入站被封）。
+tvbox.pfac.fun:8443 {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+		resolvers parrot-tv-dnsproxy:5353
+		propagation_delay 10s
+		propagation_timeout 300s
+	}
+
+	encode zstd gzip
+
+	reverse_proxy tvbox-update:80 {
+		header_up X-Forwarded-Proto https
+	}
+
+	log {
+		output file /data/tvbox-access.log {
+			roll_size 20mb
+			roll_keep 3
+		}
+	}
+}

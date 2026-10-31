@@ -1073,7 +1073,7 @@ private fun PopoverDismissLayer(onDismiss: () -> Unit) {
  */
 @Composable
 private fun SkipPanel(
-    marks: com.tvbox.desktop.data.SkipMarks?,
+    marks: com.tvbox.app.data.SkipMarks?,
     positionMs: Long,
     autoIntro: Boolean,
     autoOutro: Boolean,

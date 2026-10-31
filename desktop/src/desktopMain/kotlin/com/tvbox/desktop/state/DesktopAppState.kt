@@ -47,8 +47,8 @@ class DesktopAppState(
     internal val followedShowRepository: FollowedShowRepository = container.followedShowRepository
     internal val playbackPolicyRepository: com.tvbox.desktop.data.PlaybackPolicyRepository =
         container.playbackPolicyRepository
-    internal val skipMarksRepository: com.tvbox.desktop.data.SkipMarksRepository = container.skipMarksRepository
-    internal val speedCacheRepository: com.tvbox.desktop.data.SpeedCacheRepository =
+    internal val skipMarksRepository: com.tvbox.app.data.SkipMarksRepository = container.skipMarksRepository
+    internal val speedCacheRepository: com.tvbox.app.data.SpeedCacheRepository =
         container.speedCacheRepository
     internal val playbackAgent = PlaybackAgent()
 
@@ -100,8 +100,8 @@ class DesktopAppState(
     val notice: StateFlow<Notice?> = _notice.asStateFlow()
 
     /** 每部剧的片头片尾标记，按 apiLineId:movieId 索引。 */
-    private val _skipMarks = MutableStateFlow<Map<String, com.tvbox.desktop.data.SkipMarks>>(emptyMap())
-    val skipMarks: StateFlow<Map<String, com.tvbox.desktop.data.SkipMarks>> = _skipMarks.asStateFlow()
+    private val _skipMarks = MutableStateFlow<Map<String, com.tvbox.app.data.SkipMarks>>(emptyMap())
+    val skipMarks: StateFlow<Map<String, com.tvbox.app.data.SkipMarks>> = _skipMarks.asStateFlow()
 
     internal val searchHistoryRepository: com.tvbox.desktop.data.SearchHistoryRepository =
         container.searchHistoryRepository
@@ -195,8 +195,8 @@ class DesktopAppState(
     }
 
     internal fun updateSkipMarks(
-        block: (Map<String, com.tvbox.desktop.data.SkipMarks>) ->
-        Map<String, com.tvbox.desktop.data.SkipMarks>,
+        block: (Map<String, com.tvbox.app.data.SkipMarks>) ->
+        Map<String, com.tvbox.app.data.SkipMarks>,
     ) {
         _skipMarks.value = block(_skipMarks.value)
     }
